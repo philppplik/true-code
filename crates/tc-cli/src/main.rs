@@ -1,10 +1,10 @@
-//! The `true-code` binary.
+//! The `truecode` binary.
 //!
 //! Three entry points, one engine:
 //!
-//! * `true-code` — the interactive TUI
-//! * `true-code -p "…"` — headless, for scripts and CI
-//! * `true-code models` / `config` — introspection, so the setup is never a guess
+//! * `truecode` — the interactive TUI
+//! * `truecode -p "…"` — headless, for scripts and CI
+//! * `truecode models` / `config` — introspection, so the setup is never a guess
 //!
 //! The headless path exists from day one on purpose: a harness that only works
 //! inside its own UI cannot be tested in CI, scripted, or driven by an editor.
@@ -23,13 +23,30 @@ use tc_core::SessionId;
 use tc_tools::Ledger;
 use tc_tools::{ToolContext, ToolSet};
 
+/// Shown under `truecode --help`.
+///
+/// Examples earn their space here: the first question is always "what do I
+/// actually type", and a flag list does not answer it.
+const EXAMPLES: &str = "Examples:
+  truecode                                 start a session (read-only)
+  truecode --permission-mode write         let it edit files, with confirmation
+  truecode --permission-mode full          let it run commands too
+  truecode -p \"what does src/lib.rs do?\"   one question, answer on stdout
+
+  truecode doctor                          check the setup before anything else
+  truecode undo                            revert the last change it made
+  truecode constraints                     show the project rules in force
+
+First run? `truecode doctor` tells you what is missing.";
+
 /// Command-line interface.
 #[derive(Debug, Parser)]
 #[command(
-    name = "true-code",
+    name = "truecode",
     version,
     about = "An agentic coding harness that shows you what it did — and what it cost.",
     long_about = None,
+    after_help = EXAMPLES,
 )]
 struct Cli {
     /// Run a single prompt without the TUI and print the answer to stdout.
@@ -74,6 +91,8 @@ enum Command {
     Undo,
     /// Show the project rules and whether each one is checked automatically.
     Constraints,
+    /// Check that the setup is complete and report anything missing.
+    Doctor,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -95,6 +114,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Config) => print_config(&config),
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         Some(Command::Constraints) => print_constraints(&cwd)?,
+        Some(Command::Doctor) => {
+            if !doctor(&config, &cwd) {
+                std::process::exit(1);
+            }
+        }
         None => {
             let mode = PermissionMode::parse(&cli.permission_mode).ok_or_else(|| {
                 // Never fall back to a default here: guessing a permission level
@@ -202,6 +226,77 @@ fn undo_last(cwd: &Path) -> anyhow::Result<String> {
     })
 }
 
+/// Checks the setup and reports what is missing.
+///
+/// Returns whether everything needed to start a session is in place. A first run
+/// fails for one of about four reasons, and guessing which one from a stack trace
+/// is a bad first impression.
+fn doctor(config: &Config, cwd: &Path) -> bool {
+    let mut ready = true;
+
+    println!(
+        "truecode {}
+",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let mut check = |label: &str, outcome: Result<String, String>| match outcome {
+        Ok(detail) => println!("  ok    {label:<18} {detail}"),
+        Err(problem) => {
+            println!("  FAIL  {label:<18} {problem}");
+            ready = false;
+        }
+    };
+
+    check(
+        "model",
+        config
+            .model_info()
+            .map(|info| format!("{} ({} token context)", info.id, info.context_window))
+            .map_err(|err| err.to_string()),
+    );
+
+    check(
+        "api key",
+        config.api_key().map(|_| "found in the environment".to_owned()).map_err(|err| {
+            format!(
+                "{err}
+        PowerShell: $env:ANTHROPIC_API_KEY = \"sk-...\""
+            )
+        }),
+    );
+
+    check(
+        "project rules",
+        Ledger::load(cwd)
+            .map(|ledger| match ledger.constraints().len() {
+                0 => "none set".to_owned(),
+                n => format!("{n} checked, {} reminders", ledger.reminders().len()),
+            })
+            .map_err(|err| err.to_string()),
+    );
+
+    // Written to on every session; a read-only checkout degrades to no log, which
+    // silently costs undo and replay.
+    let sessions = cwd.join(".truecode").join("sessions");
+    check(
+        "session dir",
+        std::fs::create_dir_all(&sessions)
+            .map(|()| format!("writable — {}", sessions.display()))
+            .map_err(|err| format!("not writable: {err} (undo and replay will be unavailable)")),
+    );
+
+    println!();
+    if ready {
+        println!(
+            "Ready. Start with `truecode`, or `truecode --permission-mode write` to let it edit."
+        );
+    } else {
+        println!("Fix the FAIL lines above, then run `truecode doctor` again.");
+    }
+    ready
+}
+
 /// Prints the project's rules.
 ///
 /// Checked and unchecked rules are listed separately, because a user who cannot
@@ -270,7 +365,7 @@ fn print_config(config: &Config) {
 
 /// Initialises logging.
 ///
-/// Logs go to stderr so that `true-code -p "…" > answer.md` stays pipeable, and
+/// Logs go to stderr so that `truecode -p "…" > answer.md` stays pipeable, and
 /// are silent unless `RUST_LOG` asks for them.
 fn init_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -291,7 +386,7 @@ mod tests {
 
     #[test]
     fn print_mode_is_available_as_dash_p() {
-        let cli = Cli::try_parse_from(["true-code", "-p", "hello"]).expect("parses");
+        let cli = Cli::try_parse_from(["truecode", "-p", "hello"]).expect("parses");
         assert_eq!(cli.prompt.as_deref(), Some("hello"));
         assert!(cli.command.is_none());
     }
@@ -299,19 +394,19 @@ mod tests {
     #[test]
     fn the_model_can_be_overridden_on_the_command_line() {
         let cli =
-            Cli::try_parse_from(["true-code", "--model", "openai/gpt-4.1-mini"]).expect("parses");
+            Cli::try_parse_from(["truecode", "--model", "openai/gpt-4.1-mini"]).expect("parses");
         assert_eq!(cli.model.as_deref(), Some("openai/gpt-4.1-mini"));
     }
 
     #[test]
     fn introspection_subcommands_are_reachable() {
-        let cli = Cli::try_parse_from(["true-code", "models"]).expect("parses");
+        let cli = Cli::try_parse_from(["truecode", "models"]).expect("parses");
         assert!(matches!(cli.command, Some(Command::Models)));
     }
 
     #[test]
     fn no_arguments_means_the_interactive_tui() {
-        let cli = Cli::try_parse_from(["true-code"]).expect("parses");
+        let cli = Cli::try_parse_from(["truecode"]).expect("parses");
         assert!(cli.prompt.is_none());
         assert!(cli.command.is_none());
     }

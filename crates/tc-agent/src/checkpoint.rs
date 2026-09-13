@@ -14,7 +14,7 @@
 //! Undo is then derived entirely from the event log, exactly as ADR 0004 promised:
 //! find the newest `Checkpointed` that no `Reverted` refers to, restore it, append
 //! a `Reverted`. Nothing else has to be kept in sync, and undo works from a *later
-//! process* — `true-code undo` tomorrow reverts what the agent wrote today.
+//! process* — `truecode undo` tomorrow reverts what the agent wrote today.
 //!
 //! # What this is not
 //!

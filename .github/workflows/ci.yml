@@ -55,8 +55,8 @@ jobs:
       - name: Smoke-test the binary
         shell: bash
         run: |
-          cargo run -q --bin true-code -- --version
-          cargo run -q --bin true-code -- models
+          cargo run -q --bin truecode -- --version
+          cargo run -q --bin truecode -- models
 
   docs:
     name: Documentation

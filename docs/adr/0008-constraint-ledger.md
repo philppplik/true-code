@@ -70,7 +70,7 @@ constraints`.
   stable" is a reminder, not a check, and the UI says so rather than implying a
   green tick was earned.
 - A badly written rule is worse than no rule: it fires on clean changes, and users
-  learn to approve past it. `true-code constraints` exists so a rule can be read
+  learn to approve past it. `truecode constraints` exists so a rule can be read
   back and checked before it is trusted.
 - Extraction of constraints from the *prompt* — "don't add dependencies", typed in
   chat — is not implemented. It needs a model call and is a separate decision.

@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "true-code"
+name = "truecode"
 path = "src/main.rs"
 
 [dependencies]

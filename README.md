@@ -48,7 +48,7 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
   `.truecode/constraints.toml`; they are restated on every request *and* verified
   against the change before it is applied
   ([ADR 0008](docs/adr/0008-constraint-ledger.md)).
-- **Undo.** `/undo` in the TUI, or `true-code undo` from the shell — which works
+- **Undo.** `/undo` in the TUI, or `truecode undo` from the shell — which works
   long after the session ended, because it reads the session log
   ([ADR 0007](docs/adr/0007-undo-from-the-event-log.md)).
 - **Append-only session log** in `.truecode/sessions/`, recording what ran, what
@@ -68,15 +68,26 @@ See [the roadmap](docs/PLAN-v0.1.md#6-roadmap-realistisch-mit-abnahmekriterien).
 
 ## Install
 
-Requires [Rust](https://rustup.rs) 1.88 or newer.
+Requires [Rust](https://rustup.rs) 1.88 or newer. There is no installer yet —
+prebuilt binaries are phase P5.
 
 ```bash
 git clone https://github.com/philppplik/true-code
 cd true-code
-cargo build --release
+cargo install --path crates/tc-cli
 ```
 
-The binary lands in `target/release/true-code` (`.exe` on Windows).
+That puts **`truecode`** on your `PATH`. Then:
+
+```bash
+truecode doctor
+```
+
+which checks the model, your API key, the project rules and whether the session
+directory is writable, and names whatever is missing.
+
+Step-by-step, including Windows specifics and what to do when something goes
+wrong: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## Use
 
@@ -90,11 +101,11 @@ export ANTHROPIC_API_KEY=...   # PowerShell: $env:ANTHROPIC_API_KEY = "..."
 
 ```bash
 true-code                                  # interactive TUI, read-only
-true-code --permission-mode write          # can edit files, with confirmation
-true-code --permission-mode full           # can also run commands
-true-code -p "explain this error" > answer.md
-true-code models                           # catalogue with assumed prices
-true-code config                           # resolved config, and where it came from
+truecode --permission-mode write          # can edit files, with confirmation
+truecode --permission-mode full           # can also run commands
+truecode -p "explain this error" > answer.md
+truecode models                           # catalogue with assumed prices
+truecode config                           # resolved config, and where it came from
 ```
 
 In the TUI: `Enter` sends · `Esc` aborts the running turn · `Ctrl+C` quits ·
@@ -144,7 +155,7 @@ labelled that way everywhere, because a green tick nobody earned is worse than n
 tick at all.
 
 ```bash
-true-code constraints   # what is in force, and what is only a reminder
+truecode constraints   # what is in force, and what is only a reminder
 ```
 
 In headless mode `--yes` still refuses a change that breaks a rule. "Do not ask me
@@ -156,7 +167,7 @@ This repository uses its own ledger — see
 ### Taking a change back
 
 ```bash
-true-code undo    # revert the last change true-code made in this project
+truecode undo    # revert the last change true-code made in this project
 ```
 
 Run it again to step further back. It reads the newest session log, so it works
@@ -176,7 +187,7 @@ session_limit_usd = 2.0
 warn_at_percent = 70
 ```
 
-Run `true-code config` to see what actually took effect.
+Run `truecode config` to see what actually took effect.
 
 ## Platform support
 
@@ -194,7 +205,7 @@ crates/
 ├── tc-tools/      workspace-scoped tools with a hard path boundary
 ├── tc-agent/      the loop — turns, tool execution, guard rails, session log
 ├── tc-tui/        ratatui interface — streaming, cost, instant abort
-└── tc-cli/        the `true-code` binary
+└── tc-cli/        the `truecode` binary
 ```
 
 **Architecture law #1:** the engine never depends on the UI. Anything that only
