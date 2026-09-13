@@ -71,8 +71,13 @@ truecode
 
 On a first run with no key, true-code asks which provider to use and lets you
 paste a key. It is stored in your **operating system's keyring** — Credential
-Manager on Windows, Keychain on macOS, Secret Service on Linux. Never in a file
-true-code wrote, so a config you commit can never leak a credential.
+Manager on Windows, Keychain on macOS, the kernel session keyring on Linux. Never
+in a file true-code wrote, so a config you commit can never leak a credential.
+
+> **On Linux the key does not survive a reboot.** It lives in the kernel session
+> keyring, which is the only option that does not require `libdbus-1-dev` to be
+> installed before true-code will even build. Use the environment variable below
+> if you want it to stick.
 
 **Or from the command line:**
 
@@ -120,8 +125,9 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."          # this terminal only
 export ANTHROPIC_API_KEY="sk-ant-..."          # add to ~/.zshrc to keep it
 ```
 
-On a headless Linux box with no Secret Service, the keyring is unavailable and the
-environment variable is the way — true-code says so rather than failing obscurely.
+On Linux the keyring forgets the key when the session ends, and on a headless box
+it may be unavailable entirely — the environment variable is the durable answer
+there. true-code says so rather than failing obscurely.
 
 ## 4. Check the setup
 

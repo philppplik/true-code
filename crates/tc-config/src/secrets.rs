@@ -6,7 +6,13 @@
 //!    `OPENROUTER_API_KEY`. Wins, always, so CI and scripts stay predictable and
 //!    a temporary override needs no cleanup.
 //! 2. **The OS keyring** — Credential Manager on Windows, Keychain on macOS,
-//!    Secret Service on Linux. What the setup screen writes to.
+//!    the kernel session keyring on Linux. What the setup screen writes to.
+//!
+//!    Linux is the weak one: keyutils holds the key for the login session and
+//!    forgets it on reboot. Secret Service would persist, but it needs
+//!    `libdbus-1-dev` present before `cargo install` will build at all, and an
+//!    install guide whose first command fails on a clean machine is the worse
+//!    trade. On Linux, the environment variable is the durable answer.
 //!
 //! **Never a file true-code wrote.** That commitment is in `SECURITY.md` and it
 //! is the reason a config file can be committed to a repository without turning
@@ -28,8 +34,8 @@ const SERVICE: &str = "true-code";
 pub enum SecretError {
     /// The OS keyring is unavailable or refused the operation.
     ///
-    /// Common on a headless Linux box with no Secret Service running, which is
-    /// why the message points at the environment variable instead.
+    /// Common on a headless Linux box, which is why the message points at the
+    /// environment variable instead.
     #[error("the system keyring is unavailable ({detail}) — set {env_var} instead")]
     Keyring {
         /// Which variable would work.

@@ -66,8 +66,16 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 directories = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
-# OS keyring: Credential Manager, Keychain, Secret Service. Never a file we wrote.
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# OS keyring: Credential Manager on Windows, Keychain on macOS, kernel keyutils
+# on Linux. Never a file we wrote.
+#
+# Linux uses `linux-native` rather than Secret Service on purpose. Secret Service
+# pulls in libdbus-sys, which needs libdbus-1-dev installed before `cargo install`
+# will even build — and an install guide whose first command fails on a clean
+# machine is worse than a keyring with a shorter memory. The trade is documented:
+# on Linux the key lives in the kernel session keyring and does not survive a
+# reboot, so the environment variable is the persistent option there.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 rpassword = "7"
 
 [workspace.lints.rust]
