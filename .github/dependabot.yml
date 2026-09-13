@@ -1,0 +1,23 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # One PR for the routine patch churn, individual PRs for anything that
+      # can actually break a build. Five separate patch PRs a week is noise
+      # people learn to ignore — which is how a real advisory gets missed.
+      patch-updates:
+        update-types: [patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci(deps)"
