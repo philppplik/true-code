@@ -15,7 +15,7 @@ what Claude Code uses), Go (simple concurrency, easy cross-compilation), and Rus
 
 Rust, with [ratatui](https://ratatui.rs) for widgets, [crossterm](https://github.com/crossterm-rs/crossterm)
 as the terminal backend, and [tokio](https://tokio.rs) as the async runtime.
-Edition 2024, MSRV 1.85.
+Edition 2024, MSRV 1.88.
 
 ## Rationale
 
@@ -39,5 +39,8 @@ Edition 2024, MSRV 1.85.
 - The LLM tooling ecosystem in Rust is thinner than in Python or TypeScript. This
   pushed the decision in ADR 0003 (hand-rolled provider trait), which turned out
   to be the right call independently.
-- MSRV 1.85 is required by edition 2024 and is checked in CI, so it cannot drift
-  silently.
+- MSRV is **1.88**, checked in CI so it cannot drift silently. Edition 2024 alone
+  would only require 1.85; the higher floor comes from ratatui 0.30, which was
+  adopted to clear a use-after-free advisory in a transitive dependency. Picking
+  the newer compiler over the older dependency is the trade this project will
+  keep making.
