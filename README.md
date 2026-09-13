@@ -31,15 +31,22 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 
 ## Status
 
-**Phase P0 — spike.** What works today:
+**Phase P1 — a read-only agent.** What works today:
 
-- Streaming chat in a ratatui TUI, with `Esc` aborting mid-answer
-- Live token and cost accounting with a session budget that actually stops
-- Model-neutral provider layer (Anthropic and OpenAI wire protocols)
-- Headless mode (`-p`) for scripts and CI
-- Layered configuration and a model catalogue you can inspect
+- **Agent loop with tools.** The agent reads your actual code before answering:
+  `read_file`, `list_dir`, `glob`, `grep`. You see every call as it happens.
+- **Read-only by design.** Nothing can be modified yet. Writing lands together
+  with diff confirmation, not before it.
+- **Guard rails that stop with a reason** — turn limit, session budget, and loop
+  detection for an agent repeating itself. No silent stops.
+- **Live token and cost accounting**, with a budget that actually halts the run.
+- **Append-only session log** in `.truecode/sessions/`, ready for replay.
+- **Model-neutral provider layer** (Anthropic and OpenAI wire protocols),
+  including tool calls and prompt-cache accounting on both.
+- **Headless mode** (`-p`) for scripts and CI.
 
-Not yet built: tools, the agent loop, permissions, sandboxing, MCP.
+Not yet built: writing and shell tools, diff confirmation, permission modes,
+OS sandboxing, MCP.
 See [the roadmap](docs/PLAN-v0.1.md#6-roadmap-realistisch-mit-abnahmekriterien).
 
 > Treat this as a spike, not a product. It will change shape.
@@ -102,9 +109,11 @@ suite on Windows, Linux and macOS on every push.
 
 ```
 crates/
-├── tc-core/       domain model — messages, usage, cost, event log
+├── tc-core/       domain model — messages, tool calls, usage, cost, event log
 ├── tc-config/     layered config, model catalogue, secret resolution
 ├── tc-providers/  one narrow trait, one normalised stream, many vendors
+├── tc-tools/      workspace-scoped tools with a hard path boundary
+├── tc-agent/      the loop — turns, tool execution, guard rails, session log
 ├── tc-tui/        ratatui interface — streaming, cost, instant abort
 └── tc-cli/        the `true-code` binary
 ```
