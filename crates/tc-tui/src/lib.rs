@@ -11,6 +11,7 @@
 //!    entered, on purpose.
 
 pub mod app;
+pub mod setup;
 mod ui;
 
 use std::io::{Stdout, stdout};

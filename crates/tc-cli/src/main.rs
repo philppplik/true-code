@@ -33,6 +33,7 @@ const EXAMPLES: &str = "Examples:
   truecode --permission-mode full          let it run commands too
   truecode -p \"what does src/lib.rs do?\"   one question, answer on stdout
 
+  truecode auth login openrouter           store a key (anthropic | openai | openrouter)
   truecode doctor                          check the setup before anything else
   truecode verify                          run this project's build, tests and lint
   truecode undo                            revert the last change it made
@@ -98,6 +99,28 @@ enum Command {
     ///
     /// What `unverified` in the proof panel tells you to reach for.
     Verify,
+    /// Store, check or remove an API key.
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+/// Key management.
+#[derive(Debug, Subcommand)]
+enum AuthAction {
+    /// Store a key for a provider in the system keyring.
+    Login {
+        /// Which provider: anthropic, openai or openrouter.
+        provider: String,
+    },
+    /// Show which providers have a key, and where it came from.
+    Status,
+    /// Remove a provider's key from the system keyring.
+    Logout {
+        /// Which provider.
+        provider: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -119,6 +142,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Config) => print_config(&config),
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         Some(Command::Constraints) => print_constraints(&cwd)?,
+        Some(Command::Auth { action }) => auth(&action)?,
         Some(Command::Verify) => {
             if !verify(&cwd)? {
                 std::process::exit(1);
@@ -166,7 +190,16 @@ fn start_session(
     auto_approve: bool,
 ) -> anyhow::Result<i32> {
     let info = config.model_info()?;
-    let api_key = config.api_key()?;
+
+    // The first run should not dead-end on "set an environment variable". In an
+    // interactive session we can just ask; headless has nobody to ask, so it
+    // keeps the error.
+    let api_key = match config.api_key() {
+        Ok(key) => key,
+        Err(err) if prompt.is_none() => first_run_setup(info.vendor).ok_or(err)?,
+        Err(err) => return Err(err.into()),
+    };
+
     let provider: Arc<dyn tc_providers::Provider> =
         Arc::from(tc_providers::provider_for(info, api_key));
 
@@ -233,6 +266,94 @@ fn undo_last(cwd: &Path) -> anyhow::Result<String> {
     Ok(match entry.backup {
         Some(_) => format!("Reverted {}.", entry.path),
         None => format!("Removed {}, which true-code had created.", entry.path),
+    })
+}
+
+/// Offers the setup screen when no key is configured.
+///
+/// Returns the key to use, or `None` if the user backed out — in which case the
+/// original "no key" error is the right thing to report.
+fn first_run_setup(vendor: &'static tc_config::Vendor) -> Option<String> {
+    // A failure to *draw the setup screen* must not be reported as the problem;
+    // the missing key is.
+    let Ok(Some(chosen)) = tc_tui::setup::run(tc_config::catalog::VENDORS) else {
+        return None;
+    };
+
+    if let Err(err) = tc_config::secrets::store(chosen.vendor, &chosen.key) {
+        // Storing failed — a headless Linux box with no keyring, usually. The key
+        // still works for this session, so use it and say what happened.
+        eprintln!("Could not save the key ({err}). Using it for this session only.");
+    } else {
+        println!("Saved {} to the system keyring.", chosen.vendor.name);
+    }
+
+    if chosen.vendor.id != vendor.id {
+        // They picked a different provider than the configured model belongs to.
+        // Saying nothing would produce a baffling auth error on the first request.
+        eprintln!(
+            "Note: the configured model is a {} model. Run `truecode --model {}/…` or set              `model` in .truecode/config.toml to use {}.",
+            vendor.name, chosen.vendor.id, chosen.vendor.name
+        );
+        return None;
+    }
+    Some(chosen.key)
+}
+
+/// Stores, reports on, or removes API keys.
+fn auth(action: &AuthAction) -> anyhow::Result<()> {
+    match action {
+        AuthAction::Status => {
+            println!("{:<14} {:<20} SET IT WITH", "PROVIDER", "KEY");
+            for vendor in tc_config::catalog::VENDORS {
+                let found = tc_config::secrets::source_for(vendor)
+                    .map_or_else(|| "—".to_owned(), |source| source.label().to_owned());
+                println!("{:<14} {:<20} truecode auth login {}", vendor.name, found, vendor.id);
+            }
+            println!(
+                "
+An environment variable always wins over the keyring."
+            );
+        }
+
+        AuthAction::Login { provider } => {
+            let vendor = resolve_vendor(provider)?;
+
+            println!("Get a key at {}", vendor.signup_url);
+            // Read without echo: a key pasted into a terminal otherwise lands in
+            // the scrollback and, on most shells, in the history file.
+            let key = rpassword::prompt_password(format!("{} API key: ", vendor.name))?;
+
+            if key.trim().is_empty() {
+                anyhow::bail!("nothing entered — no key was stored");
+            }
+            tc_config::secrets::store(vendor, key.trim())?;
+
+            println!("Stored in the system keyring.");
+            if std::env::var(vendor.api_key_env).is_ok() {
+                // Saying nothing here would leave someone debugging why their new
+                // key had no effect.
+                println!(
+                    "Note: {} is also set in your environment and takes precedence.",
+                    vendor.api_key_env
+                );
+            }
+        }
+
+        AuthAction::Logout { provider } => {
+            let vendor = resolve_vendor(provider)?;
+            tc_config::secrets::forget(vendor)?;
+            println!("Removed {} from the system keyring.", vendor.name);
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a provider name, listing the alternatives when it is wrong.
+fn resolve_vendor(provider: &str) -> anyhow::Result<&'static tc_config::Vendor> {
+    tc_config::vendor(provider).ok_or_else(|| {
+        let known: Vec<&str> = tc_config::catalog::VENDORS.iter().map(|v| v.id).collect();
+        anyhow::anyhow!("unknown provider `{provider}` — try one of: {}", known.join(", "))
     })
 }
 
@@ -404,14 +525,25 @@ Sent to the model but NOT checked:"
 /// Prices are shown rather than hidden so that a stale assumption is visible
 /// instead of quietly producing a wrong cost estimate.
 fn print_models() {
-    println!("{:<32} {:>10}  {:>9}  {:>9}", "MODEL", "CONTEXT", "IN/MTOK", "OUT/MTOK");
+    println!("{:<40} {:>10}  {:>9}  {:>9}", "MODEL", "CONTEXT", "IN/MTOK", "OUT/MTOK");
     for info in tc_config::catalog() {
-        println!(
-            "{:<32} {:>10} {:>9.2} {:>10.2}",
-            info.id, info.context_window, info.price.input_per_mtok, info.price.output_per_mtok,
-        );
+        match info.price {
+            Some(price) => println!(
+                "{:<40} {:>10} {:>9.2} {:>10.2}",
+                info.id, info.context_window, price.input_per_mtok, price.output_per_mtok
+            ),
+            // Shown as unknown rather than as zero: a confident 0.00 would be
+            // read as "free", which is a costly thing to believe.
+            None => {
+                println!("{:<40} {:>10} {:>9} {:>10}", info.id, info.context_window, "?", "?");
+            }
+        }
     }
     println!("\nPrices are indicative list prices, not a billing source of truth.");
+    println!(
+        "Any `openrouter/<vendor>/<model>` also works. A model true-code cannot price\n\
+         reports no cost rather than an invented one."
+    );
 }
 
 /// Prints the resolved configuration.
