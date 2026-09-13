@@ -63,6 +63,29 @@ pub enum EventKind {
         /// The complete assistant text for the turn.
         content: String,
     },
+    /// The model asked for a tool to run.
+    ///
+    /// Recorded *before* execution, so a session that crashes mid-tool still
+    /// shows what was attempted — which is usually the interesting part.
+    ToolCalled {
+        /// Identifier tying this to its [`EventKind::ToolCompleted`].
+        call_id: String,
+        /// Name of the tool.
+        tool: String,
+        /// Arguments the model supplied.
+        input: serde_json::Value,
+    },
+    /// A tool finished.
+    ToolCompleted {
+        /// Identifier of the matching [`EventKind::ToolCalled`].
+        call_id: String,
+        /// Whether the tool failed.
+        is_error: bool,
+        /// How long it ran, in milliseconds.
+        duration_ms: u64,
+        /// Size of the output in bytes, before any truncation for the model.
+        output_bytes: usize,
+    },
     /// A turn finished, with its accounting.
     TurnCompleted {
         /// Why generation stopped.

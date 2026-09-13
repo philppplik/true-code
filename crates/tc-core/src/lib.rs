@@ -22,7 +22,7 @@ pub mod message;
 
 pub use cost::{Cost, Price, Usage};
 pub use event::{Event, EventKind, SessionId};
-pub use message::{Delta, Message, Role, StopReason};
+pub use message::{Content, Delta, Message, Role, StopReason, ToolCall, ToolResult};
 
 /// Errors raised by the core domain model.
 #[derive(Debug, thiserror::Error)]
