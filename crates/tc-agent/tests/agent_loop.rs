@@ -13,10 +13,9 @@ use common::{
     ScriptedProvider, agent_with, answer, call_tool, config, drive, finish_reason, workspace,
 };
 use tc_agent::approval::ApproveAll;
-use tc_agent::{Agent, AgentEvent, FinishReason, PermissionMode, SessionLog};
-use tc_core::{Delta, Price, SessionId, StopReason, Usage};
+use tc_agent::{AgentEvent, FinishReason, PermissionMode};
+use tc_core::{Delta, Price, StopReason, Usage};
 use tc_providers::{DeltaStream, Provider, ProviderError, Request};
-use tc_tools::{ToolContext, ToolSet};
 use tokio::sync::mpsc;
 
 /// Runs one prompt against a scripted provider with everything auto-approved.
@@ -188,14 +187,12 @@ async fn a_provider_failure_is_surfaced_rather_than_swallowed() {
     }
 
     let dir = workspace();
-    let mut agent = Agent::new(
+    let mut agent = agent_with(
         Arc::new(Failing),
-        ToolSet::read_only(),
-        ToolContext::new(dir.path()),
-        &config(5.0),
-        SessionLog::disabled(SessionId::new()),
-        Arc::new(ApproveAll),
         PermissionMode::ReadOnly,
+        dir.path(),
+        &config(5.0),
+        Arc::new(ApproveAll),
     );
 
     let (tx, mut rx) = mpsc::channel(64);
@@ -221,14 +218,12 @@ async fn the_session_log_records_the_whole_run() {
         answer("It returns 42."),
     ]));
 
-    let mut agent = Agent::new(
+    let mut agent = agent_with(
         provider,
-        ToolSet::read_only(),
-        ToolContext::new(dir.path()),
-        &config(5.0),
-        SessionLog::create(dir.path(), SessionId::new()),
-        Arc::new(ApproveAll),
         PermissionMode::ReadOnly,
+        dir.path(),
+        &config(5.0),
+        Arc::new(ApproveAll),
     );
     let log_path = agent.log().path().expect("the log is enabled").to_path_buf();
 
@@ -264,14 +259,12 @@ async fn tool_arguments_are_never_logged_before_the_tool_runs_out_of_order() {
         answer("Found it."),
     ]));
 
-    let mut agent = Agent::new(
+    let mut agent = agent_with(
         provider,
-        ToolSet::read_only(),
-        ToolContext::new(dir.path()),
-        &config(5.0),
-        SessionLog::create(dir.path(), SessionId::new()),
-        Arc::new(ApproveAll),
         PermissionMode::ReadOnly,
+        dir.path(),
+        &config(5.0),
+        Arc::new(ApproveAll),
     );
     let log_path = agent.log().path().expect("the log is enabled").to_path_buf();
 
