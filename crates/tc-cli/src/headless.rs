@@ -81,6 +81,10 @@ async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
                 }
             }
 
+            // Goes to stderr with everything else that is not the answer, so a
+            // piped run still yields exactly the answer.
+            AgentEvent::Notice { text } => eprintln!("· {text}"),
+
             AgentEvent::Failed { message } => {
                 eprintln!("— failed: {message}");
                 exit = 1;

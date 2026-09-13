@@ -32,7 +32,7 @@ use tc_agent::{Agent, AgentEvent, ApprovalRequest, Approver, Decision, Permissio
 use tc_config::Config;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::app::{App, Status};
+use crate::app::{App, Status, Submission};
 
 /// One question from the agent, and the channel its answer goes back on.
 type ApprovalMessage = (ApprovalRequest, oneshot::Sender<Decision>);
@@ -238,12 +238,19 @@ fn handle_key(
             app.abort();
         }
 
-        KeyCode::Enter => {
-            if let Some(prompt) = app.submit() {
+        KeyCode::Enter => match app.submit() {
+            Some(Submission::Prompt(prompt)) => {
                 *run = Some(spawn_run(agent.clone(), prompt, tx.clone()));
                 app.status = Status::Working;
             }
-        }
+            // Undo touches only the filesystem, but the agent is behind a lock,
+            // so it runs as a task like any other and reports over the same channel.
+            Some(Submission::Undo) => {
+                tokio::spawn(undo(agent.clone(), tx.clone()));
+            }
+            Some(Submission::Help) => app.note(App::help_text()),
+            None => {}
+        },
 
         KeyCode::Backspace => app.backspace(),
         KeyCode::Left => app.cursor_left(),
@@ -253,6 +260,17 @@ fn handle_key(
         KeyCode::Char(ch) if !ctrl => app.insert_char(ch),
         _ => {}
     }
+}
+
+/// Undoes the last change and reports the outcome.
+async fn undo(agent: Arc<Mutex<Agent>>, tx: mpsc::Sender<AgentEvent>) {
+    let text = match agent.lock().await.undo_last() {
+        Ok(message) => message,
+        // A failed undo is reported in full. "Nothing happened" with no reason is
+        // the worst possible answer when someone is trying to take a change back.
+        Err(err) => err.to_string(),
+    };
+    let _ = tx.send(AgentEvent::Notice { text }).await;
 }
 
 /// Spawns the agent run for one prompt.

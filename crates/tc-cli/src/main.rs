@@ -67,6 +67,10 @@ enum Command {
     Models,
     /// Show the resolved configuration and where it came from.
     Config,
+    /// Revert the most recent change true-code made in this project.
+    ///
+    /// Reads the newest session log, so it works long after the session ended.
+    Undo,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -86,6 +90,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::Models) => print_models(),
         Some(Command::Config) => print_config(&config),
+        Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         None => {
             let mode = PermissionMode::parse(&cli.permission_mode).ok_or_else(|| {
                 // Never fall back to a default here: guessing a permission level
@@ -143,6 +148,34 @@ fn start_session(
     let (approver, approvals) = tc_tui::approver();
     let agent = Agent::new(provider, tools, ToolContext::new(cwd), config, log, approver, mode);
     tc_tui::run(agent, config, mode, approvals).map(|()| 0)
+}
+
+/// Reverts the most recent change recorded in this project.
+///
+/// Deliberately available without starting a session: the moment you want undo is
+/// usually after you have closed the terminal and noticed something.
+fn undo_last(cwd: &Path) -> anyhow::Result<String> {
+    let session_dir = tc_agent::checkpoint::newest_session(cwd)?;
+    let events = session_dir.join("events.jsonl");
+
+    let Some(entry) = tc_agent::checkpoint::last_undoable(&events)? else {
+        return Err(tc_agent::UndoError::NothingToUndo.into());
+    };
+
+    tc_agent::checkpoint::restore(&session_dir, cwd, &entry)?;
+
+    // Recorded in the same log, so a second `undo` walks one step further back
+    // rather than repeating itself.
+    let mut log = SessionLog::reopen(&session_dir);
+    log.append(tc_core::EventKind::Reverted {
+        path: entry.path.clone(),
+        checkpoint_seq: entry.seq,
+    });
+
+    Ok(match entry.backup {
+        Some(_) => format!("Reverted {}.", entry.path),
+        None => format!("Removed {}, which true-code had created.", entry.path),
+    })
 }
 
 /// Prints the model catalogue.

@@ -52,6 +52,21 @@ pub enum Entry {
     },
 }
 
+/// What pressing Enter asked for.
+///
+/// Slash commands are handled here rather than sent to the model: undo is a
+/// local operation on the filesystem, and paying a model turn to trigger it
+/// would be both slower and less reliable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Submission {
+    /// Send this to the model.
+    Prompt(String),
+    /// Undo the most recent change true-code made.
+    Undo,
+    /// Show the available commands.
+    Help,
+}
+
 /// What the app is currently doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -162,6 +177,8 @@ impl App {
 
             AgentEvent::Finished { reason } => self.finish(&reason),
 
+            AgentEvent::Notice { text } => self.note(text),
+
             AgentEvent::Failed { message } => {
                 self.status = Status::Idle;
                 self.notice = Some(message);
@@ -251,23 +268,55 @@ impl App {
         }
     }
 
-    /// Takes the current input as a user turn, if it is non-empty and allowed.
+    /// Interprets the current input.
     ///
-    /// Returns the prompt to send, or `None` when nothing should be sent.
-    pub fn submit(&mut self) -> Option<String> {
+    /// Returns `None` when there is nothing to do — blank input, or a turn already
+    /// in flight.
+    pub fn submit(&mut self) -> Option<Submission> {
         if self.status != Status::Idle {
             return None;
         }
-        let prompt = self.input.trim().to_owned();
-        if prompt.is_empty() {
+        let typed = self.input.trim().to_owned();
+        if typed.is_empty() {
             return None;
         }
+
         self.input.clear();
         self.cursor = 0;
         self.notice = None;
         self.scroll = 0;
-        self.entries.push(Entry::User(prompt.clone()));
-        Some(prompt)
+
+        match typed.as_str() {
+            "/undo" => Some(Submission::Undo),
+            "/help" => Some(Submission::Help),
+            // An unrecognised slash command is answered locally rather than sent
+            // to the model, which would charge for a confused reply.
+            other if other.starts_with('/') => {
+                self.notice = Some(format!("Unknown command `{other}`. Try /help."));
+                None
+            }
+            _ => {
+                self.entries.push(Entry::User(typed.clone()));
+                Some(Submission::Prompt(typed))
+            }
+        }
+    }
+
+    /// Records a local message in the transcript.
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.entries.push(Entry::Assistant(text.into()));
+        self.scroll = 0;
+    }
+
+    /// The text shown by `/help`.
+    #[must_use]
+    pub const fn help_text() -> &'static str {
+        "Commands:
+  /undo   revert the last change true-code made
+  /help   this list
+
+         Keys: Enter send · Esc abort the running turn · Ctrl+C quit · PgUp/PgDn scroll.
+         When a change is proposed: y apply · n skip · a always for this tool · Esc stop."
     }
 
     /// Inserts a character at the cursor.
@@ -484,7 +533,7 @@ mod tests {
         for ch in "hi".chars() {
             app.insert_char(ch);
         }
-        assert_eq!(app.submit().as_deref(), Some("hi"));
+        assert_eq!(app.submit(), Some(Submission::Prompt("hi".to_owned())));
         assert!(app.input.is_empty());
         assert_eq!(app.entries[0], Entry::User("hi".to_owned()));
     }
@@ -542,6 +591,47 @@ mod tests {
         let mut app = test_app();
         app.usage = Usage { input_tokens: 250, ..Usage::default() };
         assert!((app.context_fill() - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn slash_undo_is_handled_locally_rather_than_sent_to_the_model() {
+        let mut app = test_app();
+        app.input = "/undo".to_owned();
+
+        assert_eq!(app.submit(), Some(Submission::Undo));
+        assert!(app.entries.is_empty(), "a command is not part of the conversation");
+    }
+
+    #[test]
+    fn an_unknown_command_is_answered_without_charging_for_a_turn() {
+        let mut app = test_app();
+        app.input = "/nonsense".to_owned();
+
+        assert_eq!(app.submit(), None, "nothing is sent to the model");
+        assert!(app.notice.expect("a notice is set").contains("/help"));
+    }
+
+    #[test]
+    fn a_prompt_that_merely_mentions_a_slash_is_still_a_prompt() {
+        let mut app = test_app();
+        app.input = "what does /undo do?".to_owned();
+
+        assert!(matches!(app.submit(), Some(Submission::Prompt(_))));
+    }
+
+    #[test]
+    fn a_notice_lands_in_the_transcript() {
+        let mut app = test_app();
+        app.apply(AgentEvent::Notice { text: "Reverted src/lib.rs.".to_owned() });
+
+        assert_eq!(app.entries[0], Entry::Assistant("Reverted src/lib.rs.".to_owned()));
+    }
+
+    #[test]
+    fn the_help_text_lists_every_command_submit_accepts() {
+        for command in ["/undo", "/help"] {
+            assert!(App::help_text().contains(command), "`{command}` is undocumented");
+        }
     }
 
     #[test]
