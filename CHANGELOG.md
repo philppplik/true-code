@@ -10,6 +10,22 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **The comprehension check** (`--learn`). A run that changed code ends with one
+  question about that change, then the explanation — shown whether the answer was
+  right or wrong, because guessing correctly teaches nothing
+  ([ADR 0010](docs/adr/0010-comprehension-check.md)).
+- **`truecode learn`** shows which concepts have come up and how they went. No
+  score, no streak, no badges: gamification measurably lowered both intrinsic
+  motivation and exam performance.
+- The profile in `.truecode/learning.toml` feeds past difficulty back into the
+  next question, so it prefers something you have struggled with. Differentiation
+  on prior knowledge rather than on a "learning style", which is a neuromyth.
+- A skipped question records nothing. Counting it as wrong would make the profile
+  lie, and the profile decides what gets explained next.
+- The question costs a separate model call, billed and displayed like any other.
+
+### Earlier in this cycle
+
 - **OpenRouter support**, and with it every model OpenRouter proxies — including
   ones newer than this build, because any `openrouter/<vendor>/<model>` resolves
   rather than only a fixed list. A model true-code cannot price reports **no

@@ -146,6 +146,7 @@ fails on.
 truecode                                  # a session, read-only
 truecode --permission-mode write          # can edit files, asks before each change
 truecode --permission-mode full           # can also run commands
+truecode --learn                          # ask me one question after each change
 truecode -p "what does src/lib.rs do?"    # one question, answer on stdout
 ```
 
@@ -161,6 +162,7 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode undo` | Revert the last change true-code made |
 | `truecode verify` | Run this project's build, tests and lint |
 | `truecode auth status` | Which providers have a key |
+| `truecode learn` | What you have been asked about, and how it went |
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode constraints` | Show the project rules in force |
 | `truecode config` | Resolved configuration and where each part came from |
