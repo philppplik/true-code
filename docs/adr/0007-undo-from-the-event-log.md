@@ -33,7 +33,7 @@ newest `Checkpointed` that no `Reverted` refers to, restore it, append a
 is what makes repeated edits to one file undo one step at a time instead of
 jumping straight back to the original.
 
-Two entry points, one implementation: `/undo` inside the TUI, and `true-code undo`
+Two entry points, one implementation: `/undo` inside the TUI, and `truecode undo`
 from the shell — which works long after the session ended, because the log is on
 disk and nothing is held in memory.
 

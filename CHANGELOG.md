@@ -10,6 +10,22 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **`truecode doctor`** — checks the model, the API key, the project rules and
+  whether the session directory is writable, and names what is missing. A first
+  run fails for about four reasons; guessing which one from a stack trace is a bad
+  first impression.
+- **[docs/INSTALL.md](docs/INSTALL.md)** — a step-by-step install guide including
+  Windows specifics, updating, uninstalling, and a troubleshooting section.
+- `truecode --help` now ends with worked examples. The first question is always
+  "what do I actually type", and a flag list does not answer it.
+
+### Changed
+
+- **The binary is now `truecode`, not `true-code`.** One less hyphen to remember,
+  and it matches what the docs tell you to type. The project keeps its name.
+
+### Earlier in this cycle
+
 - **The constraint ledger.** Project rules in `.truecode/constraints.toml` are
   restated to the model on every request *and* checked mechanically against each
   change before it is applied. A violation turns the confirmation modal red and
@@ -18,7 +34,7 @@ While the version is `0.x`, breaking changes can land in a minor release.
 - Three checkable rule shapes — `forbid_added` (scoped by `in_files` /
   `except_files`), `forbid_files`, `forbid_command` — plus `[[reminder]]` for
   anything that cannot be checked, labelled as such everywhere.
-- `true-code constraints` lists what is in force and what is only a reminder.
+- `truecode constraints` lists what is in force and what is only a reminder.
 - `--yes` now refuses a change that breaks a rule. It means "do not ask me about
   routine changes", not "ignore the rules I wrote down".
 - A blanket "always allow this tool" no longer covers a change that breaks a rule.
@@ -35,7 +51,7 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Earlier in this cycle
 
-- **Undo.** `/undo` in the TUI and `true-code undo` from the shell revert the last
+- **Undo.** `/undo` in the TUI and `truecode undo` from the shell revert the last
   change true-code made. Run it again to step further back. Files are copied aside
   before they are changed, and undo is derived entirely from the session log — so
   it works from a fresh shell long after the session ended
@@ -105,11 +121,11 @@ While the version is `0.x`, breaking changes can land in a minor release.
 - **Model-neutral provider layer** with a normalised delta stream. Anthropic
   Messages and OpenAI Chat Completions wire protocols, including prompt-cache
   accounting on both.
-- **Headless mode** (`true-code -p "…"`). The answer goes to stdout, the
+- **Headless mode** (`truecode -p "…"`). The answer goes to stdout, the
   accounting to stderr, so piping stays clean.
 - **Layered configuration** — defaults, user file, project file, environment,
-  flags — with `true-code config` to show what actually took effect, and
-  `true-code models` to show the catalogue and its assumed prices.
+  flags — with `truecode config` to show what actually took effect, and
+  `truecode models` to show the catalogue and its assumed prices.
 - **Append-only session event log format** ([ADR 0004](docs/adr/0004-append-only-event-log.md)),
   defined now so that resume and replay are derivations rather than retrofits.
 - CI on Windows, Linux and macOS: format, clippy, tests, docs, MSRV and a

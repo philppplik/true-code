@@ -1,7 +1,7 @@
 //! Headless mode: one prompt in, one answer out.
 //!
 //! Stream separation is the contract here. The answer goes to **stdout** so that
-//! `true-code -p "…" > answer.md` produces exactly the answer. Everything else —
+//! `truecode -p "…" > answer.md` produces exactly the answer. Everything else —
 //! tool activity, accounting, warnings — goes to **stderr**, so it is visible in a
 //! terminal but never contaminates a pipe.
 
