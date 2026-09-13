@@ -44,6 +44,10 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 - **Guard rails that stop with a reason** — turn limit, session budget, and loop
   detection for an agent repeating itself. No silent stops.
 - **Live token and cost accounting**, with a budget that actually halts the run.
+- **Evidence instead of "done".** Every run ends with what the harness *observed*:
+  files changed, commands run, exit codes. Changed code that nothing checked is
+  reported as **UNVERIFIED**, in red
+  ([ADR 0009](docs/adr/0009-proof-panel.md)).
 - **Project rules that are actually checked.** Write them once in
   `.truecode/constraints.toml`; they are restated on every request *and* verified
   against the change before it is applied
@@ -125,6 +129,43 @@ There is deliberately no "apply on Enter".
 
 Headless runs refuse changes, because there is nobody to ask. `--yes` approves
 everything and is meant for CI — it is exactly as dangerous as it sounds.
+
+### Proof, not claims
+
+A large share of agent sessions end with a status report that is not true — not
+from dishonesty, but because nothing ever required it to be true. So true-code
+does not ask the model whether it worked. Every run ends with what it watched
+happen:
+
+```
+proof
+  changed   src/auth.rs
+  ok  test  cargo test --workspace  (exit 0)
+  ok  lint  cargo clippy -- -D warnings  (exit 0)
+  verdict   verified
+```
+
+and, when nothing checked the change:
+
+```
+proof
+  changed   src/auth.rs
+  checks    none ran
+  verdict   UNVERIFIED
+            Nothing here has been checked. Run `truecode verify`, or use
+            --permission-mode full so the agent can run the tests itself.
+```
+
+The second one is the feature. Anything can print a green tick after a good run;
+the value is in refusing to print one that was not earned. A confident answer is
+not evidence — only an exit code the harness observed is.
+
+```bash
+truecode verify   # run this project's build, tests and lint
+```
+
+It works out the commands from the project's shape, so it needs no configuration.
+In headless mode an alarming verdict exits non-zero.
 
 ### Project rules
 
