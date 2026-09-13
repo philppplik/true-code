@@ -34,6 +34,7 @@ const EXAMPLES: &str = "Examples:
   truecode -p \"what does src/lib.rs do?\"   one question, answer on stdout
 
   truecode doctor                          check the setup before anything else
+  truecode verify                          run this project's build, tests and lint
   truecode undo                            revert the last change it made
   truecode constraints                     show the project rules in force
 
@@ -93,6 +94,10 @@ enum Command {
     Constraints,
     /// Check that the setup is complete and report anything missing.
     Doctor,
+    /// Run this project's build, test and lint commands and report the results.
+    ///
+    /// What `unverified` in the proof panel tells you to reach for.
+    Verify,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -114,6 +119,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Config) => print_config(&config),
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         Some(Command::Constraints) => print_constraints(&cwd)?,
+        Some(Command::Verify) => {
+            if !verify(&cwd)? {
+                std::process::exit(1);
+            }
+        }
         Some(Command::Doctor) => {
             if !doctor(&config, &cwd) {
                 std::process::exit(1);
@@ -224,6 +234,68 @@ fn undo_last(cwd: &Path) -> anyhow::Result<String> {
         Some(_) => format!("Reverted {}.", entry.path),
         None => format!("Removed {}, which true-code had created.", entry.path),
     })
+}
+
+/// Runs the project's own verification commands.
+///
+/// The commands come from the project's shape, not from configuration, so this
+/// works the first time in a repository true-code has never seen.
+///
+/// Returns whether everything passed, so it is usable as a CI step.
+fn verify(cwd: &Path) -> anyhow::Result<bool> {
+    let Some(profile) = tc_tools::verify::detect(cwd) else {
+        anyhow::bail!(
+            "no recognised project in {} — expected one of Cargo.toml, go.mod,              pyproject.toml or package.json",
+            cwd.display()
+        );
+    };
+
+    println!(
+        "{} project — running {} checks
+",
+        profile.name,
+        profile.checks.len()
+    );
+    let mut all_passed = true;
+
+    for check in profile.checks {
+        println!("$ {}", check.command);
+
+        // Inherited stdio: a test suite's own output is what the user wants to
+        // read, and capturing it to re-print would only delay and mangle it.
+        let status = if cfg!(windows) {
+            std::process::Command::new("cmd").arg("/C").arg(check.command).current_dir(cwd).status()
+        } else {
+            std::process::Command::new("sh").arg("-c").arg(check.command).current_dir(cwd).status()
+        };
+
+        match status {
+            Ok(status) if status.success() => println!(
+                "  ok    {}
+",
+                check.kind.label()
+            ),
+            Ok(status) => {
+                println!(
+                    "  FAIL  {} (exit {})
+",
+                    check.kind.label(),
+                    status.code().unwrap_or(-1)
+                );
+                all_passed = false;
+            }
+            Err(err) => {
+                println!(
+                    "  FAIL  could not run: {err}
+"
+                );
+                all_passed = false;
+            }
+        }
+    }
+
+    println!("{}", if all_passed { "All checks passed." } else { "Some checks failed." });
+    Ok(all_passed)
 }
 
 /// Checks the setup and reports what is missing.

@@ -119,6 +119,7 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 |---|---|
 | `truecode doctor` | Check the setup |
 | `truecode undo` | Revert the last change true-code made |
+| `truecode verify` | Run this project's build, tests and lint |
 | `truecode constraints` | Show the project rules in force |
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode config` | Resolved configuration and where each part came from |

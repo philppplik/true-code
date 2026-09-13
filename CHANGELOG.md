@@ -10,6 +10,23 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **The proof panel.** Every run now ends with what the harness *observed* —
+  files changed, verification commands run, their exit codes — and a verdict
+  derived from those facts rather than from the model's summary. Changed code
+  that nothing checked is reported as **UNVERIFIED**, in red, with what to do
+  about it ([ADR 0009](docs/adr/0009-proof-panel.md)).
+- A failing check outranks everything else in the verdict, so a run that broke
+  the build cannot be summarised by what went well.
+- **`truecode verify`** runs the project's build, test and lint commands. The
+  commands come from the project's shape — Cargo.toml, go.mod, pyproject.toml,
+  package.json — so it works with no configuration.
+- Headless runs exit non-zero on an alarming verdict. A piped run reporting
+  success without evidence is the failure this exists to prevent.
+- Commands that prove nothing (`git status`, `ls`) are dropped from the panel
+  rather than listed, so padding cannot hide the line that matters.
+
+### Earlier in this cycle
+
 - **`truecode doctor`** — checks the model, the API key, the project rules and
   whether the session directory is writable, and names what is missing. A first
   run fails for about four reasons; guessing which one from a stack trace is a bad

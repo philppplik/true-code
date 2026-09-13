@@ -74,6 +74,16 @@ async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
                 cost = cost.add(turn_cost);
             }
 
+            // On stderr like all non-answer output, but always printed: a piped
+            // run that reports success without evidence is the failure this
+            // whole feature exists to prevent.
+            AgentEvent::Proven { proof } => {
+                eprint!("{}", proof.render());
+                if proof.verdict().is_alarming() {
+                    exit = EXIT_INCOMPLETE;
+                }
+            }
+
             AgentEvent::Finished { reason } => {
                 if reason != FinishReason::Completed {
                     eprintln!("— {}", reason.message());

@@ -26,10 +26,12 @@
 
 pub mod approval;
 pub mod checkpoint;
+pub mod proof;
 pub mod session;
 
 pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
 pub use checkpoint::UndoError;
+pub use proof::{Proof, Verdict};
 pub use tc_tools::{Effect, Ledger, PermissionMode, Risk, Violation};
 
 use std::collections::HashMap;
@@ -198,6 +200,11 @@ pub enum AgentEvent {
         /// Money spent on the turn.
         cost: Cost,
     },
+    /// What the run was observed to do. Sent just before [`AgentEvent::Finished`].
+    Proven {
+        /// The evidence.
+        proof: Proof,
+    },
     /// The run ended.
     Finished {
         /// Why it ended.
@@ -234,6 +241,8 @@ pub struct Agent {
     checkpoints: checkpoint::Checkpoints,
     /// The project's rules, checked before any change is applied.
     ledger: Ledger,
+    /// What the current run has been observed to do.
+    proof: Proof,
     /// Conversation so far, carried across prompts within a session.
     history: Vec<Message>,
     /// Running session total.
@@ -298,6 +307,7 @@ impl Agent {
                 log.directory().unwrap_or_else(|| std::path::PathBuf::from(".")),
             ),
             ledger,
+            proof: Proof::default(),
             history: Vec::new(),
             spent: Cost::default(),
             log,
@@ -350,6 +360,10 @@ impl Agent {
     ///
     /// Returns when the model has nothing left to do or a guard rail fired.
     pub async fn run(&mut self, prompt: &str, events: &mpsc::Sender<AgentEvent>) {
+        // Per prompt, not per session: the question the panel answers is what
+        // *this* task did, not what the whole afternoon amounted to.
+        self.proof = Proof::default();
+
         self.log.append(EventKind::UserMessage { content: prompt.to_owned() });
         self.history.push(Message::user(prompt));
 
@@ -357,7 +371,7 @@ impl Agent {
 
         for _turn in 0..MAX_TURNS {
             if self.budget.is_exhausted(self.spent.usd) {
-                send(events, AgentEvent::Finished { reason: FinishReason::BudgetExhausted }).await;
+                self.finish(events, FinishReason::BudgetExhausted).await;
                 return;
             }
 
@@ -365,6 +379,9 @@ impl Agent {
                 Ok(outcome) => outcome,
                 Err(message) => {
                     self.log.append(EventKind::Error { message: message.clone() });
+                    if !self.proof.is_empty() {
+                        send(events, AgentEvent::Proven { proof: self.proof.clone() }).await;
+                    }
                     send(events, AgentEvent::Failed { message }).await;
                     return;
                 }
@@ -380,7 +397,7 @@ impl Agent {
                 } else {
                     FinishReason::Completed
                 };
-                send(events, AgentEvent::Finished { reason }).await;
+                self.finish(events, reason).await;
                 return;
             }
 
@@ -394,7 +411,7 @@ impl Agent {
                 if *seen >= LOOP_THRESHOLD {
                     let reason = FinishReason::Loop { tool: call.name.clone() };
                     self.log.append(EventKind::Error { message: reason.message() });
-                    send(events, AgentEvent::Finished { reason }).await;
+                    self.finish(events, reason).await;
                     return;
                 }
             }
@@ -404,13 +421,25 @@ impl Agent {
                     self.history.push(Message::tool_results(results));
                 }
                 ToolsOutcome::Aborted => {
-                    send(events, AgentEvent::Finished { reason: FinishReason::Declined }).await;
+                    self.finish(events, FinishReason::Declined).await;
                     return;
                 }
             }
         }
 
-        send(events, AgentEvent::Finished { reason: FinishReason::TurnLimit }).await;
+        self.finish(events, FinishReason::TurnLimit).await;
+    }
+
+    /// Ends a run: the evidence first, then why it stopped.
+    ///
+    /// Every exit goes through here. A run that ends without a panel would let
+    /// "it stopped" read as "it worked", which is the whole failure this guards
+    /// against.
+    async fn finish(&mut self, events: &mpsc::Sender<AgentEvent>, reason: FinishReason) {
+        if !self.proof.is_empty() {
+            send(events, AgentEvent::Proven { proof: self.proof.clone() }).await;
+        }
+        send(events, AgentEvent::Finished { reason }).await;
     }
 
     /// Streams a single model turn and collects what it produced.
@@ -474,6 +503,7 @@ impl Agent {
         };
 
         for violation in &violations {
+            self.proof.record_violation(violation.clone());
             self.log.append(EventKind::ConstraintViolated {
                 call_id: call.id.clone(),
                 description: violation.description.clone(),
@@ -540,6 +570,8 @@ impl Agent {
         let Ok(absolute) = self.tool_ctx.resolve(&diff.path) else {
             return;
         };
+
+        self.proof.record_change(diff.path.clone());
 
         match self.checkpoints.capture(&absolute, &diff.path) {
             Ok(backup) => self.log.append(EventKind::Checkpointed {
@@ -650,6 +682,15 @@ impl Agent {
                     "They allowed it this time. Do not treat that as permission to break them \
                      again; mention it in your answer.",
                 );
+            }
+
+            // The only evidence that counts: an exit code the harness watched,
+            // not a sentence the model wrote about one.
+            if call.name == "shell"
+                && let Some(command) = call.input.get("command").and_then(|c| c.as_str())
+                && let Some(exit_code) = tc_tools::shell::parse_exit_code(&output)
+            {
+                self.proof.record_check(command, exit_code);
             }
 
             self.log.append(EventKind::ToolCompleted {
