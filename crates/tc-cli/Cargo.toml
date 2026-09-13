@@ -1,0 +1,28 @@
+[package]
+name = "tc-cli"
+description = "The true-code command-line binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "true-code"
+path = "src/main.rs"
+
+[dependencies]
+tc-core = { workspace = true }
+tc-config = { workspace = true }
+tc-providers = { workspace = true }
+tc-tui = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
