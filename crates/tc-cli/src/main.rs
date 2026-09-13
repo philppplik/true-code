@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
-use tc_agent::{Agent, SessionLog};
+use tc_agent::approval::ApproveAll;
+use tc_agent::{Agent, Approver, DenyAll, PermissionMode, SessionLog};
 use tc_config::Config;
 use tc_core::SessionId;
 use tc_tools::{ToolContext, ToolSet};
@@ -41,6 +42,19 @@ struct Cli {
     /// Project directory. Defaults to the current working directory.
     #[arg(short = 'C', long, value_name = "DIR")]
     directory: Option<PathBuf>,
+
+    /// What the agent may do: read-only, write, or full.
+    ///
+    /// `write` adds file creation and editing, `full` also allows shell commands.
+    /// Every change is shown as a diff and confirmed before it is applied.
+    #[arg(long, value_name = "MODE", default_value = "read-only")]
+    permission_mode: String,
+
+    /// Approve every change without asking. Headless mode only.
+    ///
+    /// Without it, `-p` refuses changes, because there is nobody to ask.
+    #[arg(long)]
+    yes: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -73,9 +87,25 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Models) => print_models(),
         Some(Command::Config) => print_config(&config),
         None => {
+            let mode = PermissionMode::parse(&cli.permission_mode).ok_or_else(|| {
+                // Never fall back to a default here: guessing a permission level
+                // from a typo is how an agent ends up with more access than the
+                // user asked for.
+                anyhow::anyhow!(
+                    "unknown permission mode `{}` — use read-only, write or full",
+                    cli.permission_mode
+                )
+            })?;
+
+            if cli.yes && cli.prompt.is_none() {
+                anyhow::bail!(
+                    "--yes only applies to headless runs (-p); in the TUI you confirm each change"
+                );
+            }
+
             // A guard rail that stopped the run is not a crash, but it is also not
             // a success — scripts need to be able to tell the difference.
-            let code = start_session(&config, &cwd, cli.prompt)?;
+            let code = start_session(&config, &cwd, mode, cli.prompt, cli.yes)?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -85,24 +115,34 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Starts either the headless run or the interactive TUI.
-fn start_session(config: &Config, cwd: &Path, prompt: Option<String>) -> anyhow::Result<i32> {
+fn start_session(
+    config: &Config,
+    cwd: &Path,
+    mode: PermissionMode,
+    prompt: Option<String>,
+    auto_approve: bool,
+) -> anyhow::Result<i32> {
     let info = config.model_info()?;
     let api_key = config.api_key()?;
     let provider: Arc<dyn tc_providers::Provider> =
         Arc::from(tc_providers::provider_for(info, api_key));
 
-    let agent = Agent::new(
-        provider,
-        ToolSet::read_only(),
-        ToolContext::new(cwd),
-        config,
-        SessionLog::create(cwd, SessionId::new()),
-    );
+    let tools = ToolSet::for_mode(mode);
+    let log = SessionLog::create(cwd, SessionId::new());
 
-    match prompt {
-        Some(prompt) => headless::run(agent, &prompt),
-        None => tc_tui::run(agent, config).map(|()| 0),
+    if let Some(prompt) = prompt {
+        // Nobody is watching a headless run, so the choice is between an explicit
+        // opt-in and refusing. It is never "apply and hope".
+        let approver: Arc<dyn Approver> =
+            if auto_approve { Arc::new(ApproveAll) } else { Arc::new(DenyAll) };
+
+        let agent = Agent::new(provider, tools, ToolContext::new(cwd), config, log, approver, mode);
+        return headless::run(agent, &prompt);
     }
+
+    let (approver, approvals) = tc_tui::approver();
+    let agent = Agent::new(provider, tools, ToolContext::new(cwd), config, log, approver, mode);
+    tc_tui::run(agent, config, mode, approvals).map(|()| 0)
 }
 
 /// Prints the model catalogue.

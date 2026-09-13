@@ -28,11 +28,36 @@ use crossterm::terminal::{
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tc_agent::{Agent, AgentEvent};
+use tc_agent::{Agent, AgentEvent, ApprovalRequest, Approver, Decision, PermissionMode};
 use tc_config::Config;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::app::{App, Status};
+
+/// One question from the agent, and the channel its answer goes back on.
+type ApprovalMessage = (ApprovalRequest, oneshot::Sender<Decision>);
+
+/// Routes approval requests to the TUI and waits for the user.
+///
+/// The agent knows nothing about the terminal (ADR 0002): it awaits a `Decision`,
+/// and whether that comes from a modal, a policy or a test is not its concern.
+#[derive(Debug)]
+pub struct TuiApprover {
+    requests: mpsc::Sender<ApprovalMessage>,
+}
+
+#[async_trait::async_trait]
+impl Approver for TuiApprover {
+    async fn approve(&self, request: &ApprovalRequest) -> Decision {
+        let (tx, rx) = oneshot::channel();
+
+        if self.requests.send((request.clone(), tx)).await.is_err() {
+            // The UI is gone. Refusing is the only safe reading of silence.
+            return Decision::Deny;
+        }
+        rx.await.unwrap_or(Decision::Deny)
+    }
+}
 
 /// Frame budget. Rendering per token would flicker and burn CPU for no gain.
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -40,22 +65,49 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Lines moved by one page-scroll key press.
 const PAGE_SCROLL: u16 = 10;
 
+/// Creates the approver the TUI answers, together with its request channel.
+///
+/// Returned as a pair because the agent is constructed before the event loop
+/// starts, so both ends have to exist by then.
+#[must_use]
+pub fn approver() -> (Arc<TuiApprover>, mpsc::Receiver<ApprovalMessage>) {
+    let (tx, rx) = mpsc::channel(8);
+    (Arc::new(TuiApprover { requests: tx }), rx)
+}
+
 /// Runs the interactive TUI until the user quits.
-pub fn run(agent: Agent, config: &Config) -> anyhow::Result<()> {
+pub fn run(
+    agent: Agent,
+    config: &Config,
+    mode: PermissionMode,
+    approvals: mpsc::Receiver<ApprovalMessage>,
+) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run_async(agent, config))
+    runtime.block_on(run_async(agent, config, mode, approvals))
 }
 
 /// Async body of [`run`], kept separate so the terminal guard has a clear scope.
-async fn run_async(agent: Agent, config: &Config) -> anyhow::Result<()> {
-    let mut app =
-        App::new(agent.model_id().to_owned(), agent.context_window(), agent.price(), config.budget);
+async fn run_async(
+    agent: Agent,
+    config: &Config,
+    mode: PermissionMode,
+    mut approvals: mpsc::Receiver<ApprovalMessage>,
+) -> anyhow::Result<()> {
+    let mut app = App::new(
+        agent.model_id().to_owned(),
+        agent.context_window(),
+        agent.price(),
+        config.budget,
+        mode,
+    );
 
     let agent = Arc::new(Mutex::new(agent));
     let mut terminal = TerminalGuard::enter()?;
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
     let mut run: Option<tokio::task::JoinHandle<()>> = None;
+    // The reply channel for the change currently on screen.
+    let mut answer: Option<oneshot::Sender<Decision>> = None;
 
     let mut keys = EventStream::new();
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
@@ -82,8 +134,25 @@ async fn run_async(agent: Agent, config: &Config) -> anyhow::Result<()> {
                 dirty = true;
             }
 
+            Some((request, reply)) = approvals.recv() => {
+                app.ask(request);
+                answer = Some(reply);
+                dirty = true;
+            }
+
             Some(Ok(event)) = keys.next() => {
                 match event {
+                    // While a change is on screen it owns the keyboard. Typing a
+                    // prompt into a confirmation is how people approve things
+                    // they never read.
+                    Event::Key(key) if key.kind == KeyEventKind::Press && answer.is_some() => {
+                        if let Some(decision) = decide(key, &mut app) {
+                            if let Some(reply) = answer.take() {
+                                let _ = reply.send(decision);
+                            }
+                            app.clear_pending();
+                        }
+                    }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         handle_key(key, &mut app, &mut run, &agent, &tx);
                     }
@@ -108,6 +177,43 @@ async fn run_async(agent: Agent, config: &Config) -> anyhow::Result<()> {
         handle.abort();
     }
     Ok(())
+}
+
+/// Interprets a key press while a change is awaiting confirmation.
+///
+/// Returns the decision, or `None` for keys that only scroll the diff.
+///
+/// There is deliberately no "approve on Enter": Enter is the send key everywhere
+/// else in this UI, and muscle memory must not be able to apply a change.
+fn decide(key: KeyEvent, app: &mut App) -> Option<Decision> {
+    match key.code {
+        KeyCode::Char('y' | 'Y') => Some(Decision::Approve),
+        KeyCode::Char('a' | 'A') => Some(Decision::ApproveToolForSession),
+        KeyCode::Char('n' | 'N') => Some(Decision::Deny),
+        KeyCode::Esc => Some(Decision::Abort),
+        KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.should_quit = true;
+            Some(Decision::Abort)
+        }
+        KeyCode::Up => {
+            app.scroll_pending_up(1);
+            None
+        }
+        KeyCode::Down => {
+            app.scroll_pending_down(1);
+            None
+        }
+        KeyCode::PageUp => {
+            app.scroll_pending_up(PAGE_SCROLL);
+            None
+        }
+        KeyCode::PageDown => {
+            app.scroll_pending_down(PAGE_SCROLL);
+            None
+        }
+        // Every other key is ignored rather than guessed at.
+        _ => None,
+    }
 }
 
 /// Applies one key press.

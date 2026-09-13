@@ -61,6 +61,14 @@ async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
                 }
             }
 
+            AgentEvent::ToolDeclined { tool, summary } => {
+                // Without --yes there is nobody to ask, so this is the expected
+                // outcome rather than a fault — but it must be loud, or a script
+                // will report success for a change that never happened.
+                eprintln!("· {tool} declined: {summary} (pass --yes to allow changes)");
+                exit = EXIT_INCOMPLETE;
+            }
+
             AgentEvent::TurnCompleted { usage: turn, cost: turn_cost } => {
                 usage = usage.saturating_add(turn);
                 cost = cost.add(turn_cost);

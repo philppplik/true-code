@@ -14,6 +14,7 @@ tc-agent = { workspace = true }
 tc-config = { workspace = true }
 tc-providers = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 ratatui = { workspace = true }

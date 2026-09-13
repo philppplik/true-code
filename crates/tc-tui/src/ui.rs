@@ -15,12 +15,14 @@
 //! the only carrier of meaning (roles also have text gutters), and every state is
 //! legible on a monochrome terminal.
 
+use tc_agent::{Effect, Risk};
+
 use crate::app::{App, Entry, Status, ToolState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 /// Accent colour of the brand.
 const ACCENT: Color = Color::Cyan;
@@ -42,6 +44,99 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_transcript(frame, transcript_area, app);
     draw_input(frame, input_area, app);
+
+    // Drawn last so it sits above everything: a confirmation that can be missed
+    // behind other content is not a confirmation.
+    if let Some(pending) = &app.pending {
+        draw_approval(frame, frame.area(), pending);
+    }
+}
+
+/// Share of the screen the confirmation modal occupies, in percent.
+const MODAL_WIDTH_PERCENT: u16 = 86;
+/// Share of the screen height the confirmation modal occupies, in percent.
+const MODAL_HEIGHT_PERCENT: u16 = 78;
+
+/// Draws the change-confirmation modal.
+fn draw_approval(frame: &mut Frame, area: Rect, pending: &crate::app::PendingApproval) {
+    let modal = centred(area, MODAL_WIDTH_PERCENT, MODAL_HEIGHT_PERCENT);
+    frame.render_widget(Clear, modal);
+
+    let (title, body, accent) = match &pending.request.effect {
+        Effect::Write(diff) => (format!(" {} ", diff.summary()), diff_lines(&diff.text), ACCENT),
+        Effect::Execute { command, risk } => {
+            let mut lines = vec![
+                Line::raw(""),
+                Line::from(Span::styled(
+                    format!("  $ {command}"),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::raw(""),
+            ];
+            let accent = match risk {
+                Risk::Normal => ACCENT,
+                Risk::High { reason } => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ! This {reason}."),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::raw(""));
+                    Color::Red
+                }
+            };
+            (" run a command ".to_owned(), lines, accent)
+        }
+        // Never shown: read-only effects are not sent for approval.
+        Effect::ReadOnly => (" no change ".to_owned(), Vec::new(), MUTED),
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(accent))
+        .title(Span::styled(title, Style::default().fg(accent).add_modifier(Modifier::BOLD)))
+        .title_bottom(Line::from(Span::styled(
+            " [y] apply  ·  [n] skip  ·  [a] always for this tool  ·  [Esc] stop ",
+            Style::default().fg(Color::White),
+        )));
+
+    frame.render_widget(Paragraph::new(body).block(block).scroll((pending.scroll, 0)), modal);
+}
+
+/// Colours a unified diff line by line.
+fn diff_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|line| {
+            // Colour *and* the leading sign, so the diff still reads correctly
+            // without colour.
+            let colour = match line.chars().next() {
+                Some('+') => Color::Green,
+                Some('-') => Color::Red,
+                Some('…') => MUTED,
+                _ => Color::Gray,
+            };
+            Line::from(Span::styled(format!(" {line}"), Style::default().fg(colour)))
+        })
+        .collect()
+}
+
+/// Centres a rectangle inside `area`.
+fn centred(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    let [_, middle, _] = Layout::vertical([
+        Constraint::Percentage((100 - height_percent) / 2),
+        Constraint::Percentage(height_percent),
+        Constraint::Percentage((100 - height_percent) / 2),
+    ])
+    .areas(area);
+
+    let [_, centre, _] = Layout::horizontal([
+        Constraint::Percentage((100 - width_percent) / 2),
+        Constraint::Percentage(width_percent),
+        Constraint::Percentage((100 - width_percent) / 2),
+    ])
+    .areas(middle);
+
+    centre
 }
 
 /// Draws the transcript, framed by the status bar.
@@ -73,6 +168,8 @@ fn status_line(app: &App) -> Line<'static> {
         Span::styled(app.model.clone(), Style::default().fg(Color::White)),
         Span::styled(" · ", Style::default().fg(MUTED)),
         Span::styled(status_label(app.status), Style::default().fg(status_colour(app.status))),
+        Span::styled(" · ", Style::default().fg(MUTED)),
+        Span::styled(app.mode.label(), Style::default().fg(mode_colour(app.mode))),
         Span::raw(" "),
     ])
 }
@@ -140,6 +237,18 @@ const fn status_label(status: Status) -> &'static str {
         Status::Idle => "ready",
         Status::Working => "working… (Esc aborts)",
         Status::BudgetExhausted => "budget reached",
+    }
+}
+
+/// Colour for a permission mode.
+///
+/// Read-only is the safe default and stays quiet; anything that can change the
+/// project is coloured so the mode is never a surprise.
+const fn mode_colour(mode: tc_agent::PermissionMode) -> Color {
+    match mode {
+        tc_agent::PermissionMode::ReadOnly => MUTED,
+        tc_agent::PermissionMode::Write => WARN,
+        tc_agent::PermissionMode::Full => Color::Red,
     }
 }
 
