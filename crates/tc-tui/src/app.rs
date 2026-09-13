@@ -107,6 +107,8 @@ pub struct App {
     pub notice: Option<String>,
     /// What the agent is allowed to do this session.
     pub mode: PermissionMode,
+    /// How many project rules are being checked, for the status bar.
+    pub rules: usize,
     /// A change waiting for confirmation. While set, it owns the keyboard.
     pub pending: Option<PendingApproval>,
     /// Set once the user asked to quit.
@@ -122,9 +124,11 @@ impl App {
         price: Price,
         budget: Budget,
         mode: PermissionMode,
+        rules: usize,
     ) -> Self {
         Self {
             mode,
+            rules,
             pending: None,
             entries: Vec::new(),
             input: String::new(),
@@ -391,6 +395,7 @@ mod tests {
             },
             Budget { session_limit_usd: 1.0, warn_at_percent: 70 },
             PermissionMode::Write,
+            0,
         )
     }
 

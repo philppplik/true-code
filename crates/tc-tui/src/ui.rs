@@ -62,7 +62,7 @@ fn draw_approval(frame: &mut Frame, area: Rect, pending: &crate::app::PendingApp
     let modal = centred(area, MODAL_WIDTH_PERCENT, MODAL_HEIGHT_PERCENT);
     frame.render_widget(Clear, modal);
 
-    let (title, body, accent) = match &pending.request.effect {
+    let (title, mut body, mut accent) = match &pending.request.effect {
         Effect::Write(diff) => (format!(" {} ", diff.summary()), diff_lines(&diff.text), ACCENT),
         Effect::Execute { command, risk } => {
             let mut lines = vec![
@@ -89,6 +89,25 @@ fn draw_approval(frame: &mut Frame, area: Rect, pending: &crate::app::PendingApp
         // Never shown: read-only effects are not sent for approval.
         Effect::ReadOnly => (" no change ".to_owned(), Vec::new(), MUTED),
     };
+
+    // Broken rules go at the very top, above the diff, and turn the whole modal
+    // red. A warning below a forty-line diff is a warning nobody reads.
+    if pending.request.breaks_a_rule() {
+        accent = Color::Red;
+        let mut header = vec![Line::from(Span::styled(
+            "  This breaks rules you set:",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))];
+        for violation in &pending.request.violations {
+            header.push(Line::from(Span::styled(
+                format!("    ! {}", violation.summary()),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        header.push(Line::raw(""));
+        header.append(&mut body);
+        body = header;
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -170,6 +189,7 @@ fn status_line(app: &App) -> Line<'static> {
         Span::styled(status_label(app.status), Style::default().fg(status_colour(app.status))),
         Span::styled(" · ", Style::default().fg(MUTED)),
         Span::styled(app.mode.label(), Style::default().fg(mode_colour(app.mode))),
+        Span::styled(rules_label(app.rules), Style::default().fg(MUTED)),
         Span::raw(" "),
     ])
 }
@@ -237,6 +257,15 @@ const fn status_label(status: Status) -> &'static str {
         Status::Idle => "ready",
         Status::Working => "working… (Esc aborts)",
         Status::BudgetExhausted => "budget reached",
+    }
+}
+
+/// How the active rule count is shown, or nothing when there are none.
+fn rules_label(rules: usize) -> String {
+    match rules {
+        0 => String::new(),
+        1 => " · 1 rule".to_owned(),
+        many => format!(" · {many} rules"),
     }
 }
 
