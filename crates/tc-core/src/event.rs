@@ -75,6 +75,20 @@ pub enum EventKind {
         /// Arguments the model supplied.
         input: serde_json::Value,
     },
+    /// A human decided whether a change could go ahead.
+    ///
+    /// Recorded separately from the tool call so the audit trail answers "who
+    /// allowed this?", not only "what ran?".
+    ApprovalDecided {
+        /// Identifier of the tool call this decides.
+        call_id: String,
+        /// Name of the tool.
+        tool: String,
+        /// One-line description of what was proposed.
+        summary: String,
+        /// Whether it was allowed.
+        approved: bool,
+    },
     /// A tool finished.
     ToolCompleted {
         /// Identifier of the matching [`EventKind::ToolCalled`].

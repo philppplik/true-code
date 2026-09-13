@@ -31,23 +31,30 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 
 ## Status
 
-**Phase P1 — a read-only agent.** What works today:
+**Phase P1 — an agent that can change code, once you agree.** What works today:
 
 - **Agent loop with tools.** The agent reads your actual code before answering:
-  `read_file`, `list_dir`, `glob`, `grep`. You see every call as it happens.
-- **Read-only by design.** Nothing can be modified yet. Writing lands together
-  with diff confirmation, not before it.
+  `read_file`, `list_dir`, `glob`, `grep` — and in write mode `write_file` and
+  `patch`, in full mode `shell`. You see every call as it happens.
+- **Nothing changes without you seeing the diff.** Every write is previewed and
+  confirmed before it is applied; every command is shown before it runs
+  ([ADR 0006](docs/adr/0006-confirm-before-changing.md)).
+- **Three permission modes**, defaulting to the safe one. A tool the mode does
+  not allow is never offered to the model at all.
 - **Guard rails that stop with a reason** — turn limit, session budget, and loop
   detection for an agent repeating itself. No silent stops.
 - **Live token and cost accounting**, with a budget that actually halts the run.
-- **Append-only session log** in `.truecode/sessions/`, ready for replay.
+- **Append-only session log** in `.truecode/sessions/`, recording what ran *and*
+  what you allowed.
 - **Model-neutral provider layer** (Anthropic and OpenAI wire protocols),
   including tool calls and prompt-cache accounting on both.
 - **Headless mode** (`-p`) for scripts and CI.
 
-Not yet built: writing and shell tools, diff confirmation, permission modes,
-OS sandboxing, MCP.
+Not yet built: undo and checkpoints, OS sandboxing, MCP, the LEARN mode.
 See [the roadmap](docs/PLAN-v0.1.md#6-roadmap-realistisch-mit-abnahmekriterien).
+
+> Confirmation means you see a change before it lands. It does not yet mean you
+> can take it back afterwards — commit before you let it edit anything.
 
 > Treat this as a spike, not a product. It will change shape.
 
@@ -74,14 +81,31 @@ export ANTHROPIC_API_KEY=...   # PowerShell: $env:ANTHROPIC_API_KEY = "..."
 ```
 
 ```bash
-true-code                      # interactive TUI
+true-code                                  # interactive TUI, read-only
+true-code --permission-mode write          # can edit files, with confirmation
+true-code --permission-mode full           # can also run commands
 true-code -p "explain this error" > answer.md
-true-code models               # catalogue with context windows and assumed prices
-true-code config               # resolved config, and where each part came from
+true-code models                           # catalogue with assumed prices
+true-code config                           # resolved config, and where it came from
 ```
 
 In the TUI: `Enter` sends · `Esc` aborts the running turn · `Ctrl+C` quits ·
 `PgUp`/`PgDn` scroll.
+
+When the agent proposes a change, a diff appears and waits:
+`y` apply · `n` skip · `a` always allow this tool · `Esc` stop the run.
+There is deliberately no "apply on Enter".
+
+### Permission modes
+
+| Mode | Can do | Confirmation |
+|---|---|---|
+| `read-only` *(default)* | read, search | none needed |
+| `write` | + create and edit files | diff, per change |
+| `full` | + run shell commands | diff or command, per call |
+
+Headless runs refuse changes, because there is nobody to ask. `--yes` approves
+everything and is meant for CI — it is exactly as dangerous as it sounds.
 
 ## Configure
 

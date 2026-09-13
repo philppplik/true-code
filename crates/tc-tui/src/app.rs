@@ -3,9 +3,21 @@
 //! Deliberately free of `ratatui` and `crossterm` types so that the state machine
 //! can be unit-tested without a terminal. Rendering reads this; it never owns it.
 
-use tc_agent::{AgentEvent, FinishReason};
+use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode};
 use tc_config::Budget;
 use tc_core::{Cost, Price, Usage};
+
+/// A change waiting for the user's decision.
+///
+/// Held as plain data so the state machine stays testable; the channel that
+/// delivers the answer lives in the event loop, not here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApproval {
+    /// What the agent proposes to do.
+    pub request: ApprovalRequest,
+    /// Lines scrolled within the diff, for changes taller than the modal.
+    pub scroll: u16,
+}
 
 /// How a tool call is going.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +90,10 @@ pub struct App {
     pub scroll: u16,
     /// A message to show in place of the hint line, e.g. an error.
     pub notice: Option<String>,
+    /// What the agent is allowed to do this session.
+    pub mode: PermissionMode,
+    /// A change waiting for confirmation. While set, it owns the keyboard.
+    pub pending: Option<PendingApproval>,
     /// Set once the user asked to quit.
     pub should_quit: bool,
 }
@@ -85,8 +101,16 @@ pub struct App {
 impl App {
     /// Creates an app for the given model.
     #[must_use]
-    pub fn new(model: String, context_window: u32, price: Price, budget: Budget) -> Self {
+    pub fn new(
+        model: String,
+        context_window: u32,
+        price: Price,
+        budget: Budget,
+        mode: PermissionMode,
+    ) -> Self {
         Self {
+            mode,
+            pending: None,
             entries: Vec::new(),
             input: String::new(),
             cursor: 0,
@@ -119,6 +143,16 @@ impl App {
 
             AgentEvent::ToolFinished { tool, is_error } => {
                 self.finish_tool(&tool, is_error);
+            }
+
+            AgentEvent::ToolDeclined { tool, summary } => {
+                // Recorded in the transcript, not just dismissed: what you refused
+                // is part of the session's history.
+                self.entries.push(Entry::Tool {
+                    tool,
+                    summary: format!("declined — {summary}"),
+                    state: ToolState::Failed,
+                });
             }
 
             AgentEvent::TurnCompleted { usage, cost } => {
@@ -190,6 +224,30 @@ impl App {
                     *state = ToolState::Failed;
                 }
             }
+        }
+    }
+
+    /// Shows a change and waits for a decision.
+    pub fn ask(&mut self, request: ApprovalRequest) {
+        self.pending = Some(PendingApproval { request, scroll: 0 });
+    }
+
+    /// Clears the pending change once it has been decided.
+    pub fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+
+    /// Scrolls the pending diff up by `lines`.
+    pub fn scroll_pending_up(&mut self, lines: u16) {
+        if let Some(pending) = &mut self.pending {
+            pending.scroll = pending.scroll.saturating_sub(lines);
+        }
+    }
+
+    /// Scrolls the pending diff down by `lines`.
+    pub fn scroll_pending_down(&mut self, lines: u16) {
+        if let Some(pending) = &mut self.pending {
+            pending.scroll = pending.scroll.saturating_add(lines);
         }
     }
 
@@ -283,6 +341,7 @@ mod tests {
                 cache_write_per_mtok: 3.75,
             },
             Budget { session_limit_usd: 1.0, warn_at_percent: 70 },
+            PermissionMode::Write,
         )
     }
 

@@ -14,14 +14,16 @@ async-trait = { workspace = true }
 globset = { workspace = true }
 ignore = { workspace = true }
 regex = { workspace = true }
+similar = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["process", "time"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
 [lints]
 workspace = true
