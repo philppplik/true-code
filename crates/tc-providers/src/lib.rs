@@ -19,7 +19,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use tc_config::{ModelInfo, catalog::ProviderKind};
-use tc_core::{Delta, Message, Price};
+use tc_core::{Content, Delta, Message, Price};
 
 /// A stream of normalised response increments.
 pub type DeltaStream = Pin<Box<dyn Stream<Item = Result<Delta, ProviderError>> + Send>>;
@@ -75,6 +75,21 @@ fn truncate_body(body: &str) -> String {
     format!("{}… ({} bytes total)", &body[..end], body.len())
 }
 
+/// A tool offered to the model, in provider-neutral form.
+///
+/// Deliberately not `tc_tools::Tool`: the provider layer must not depend on the
+/// tool layer, or adding a tool would mean touching every vendor client. The
+/// agent maps between the two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSchema {
+    /// Name the model calls the tool by.
+    pub name: String,
+    /// Description shown to the model.
+    pub description: String,
+    /// JSON Schema for the arguments.
+    pub input_schema: serde_json::Value,
+}
+
 /// A request for one model turn.
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -82,6 +97,8 @@ pub struct Request {
     pub system: Option<String>,
     /// Conversation so far, oldest first.
     pub messages: Vec<Message>,
+    /// Tools the model may call this turn.
+    pub tools: Vec<ToolSchema>,
     /// Upper bound on generated tokens.
     pub max_tokens: u32,
 }
@@ -91,10 +108,17 @@ pub struct Request {
 pub const DEFAULT_MAX_TOKENS: u32 = 4_096;
 
 impl Request {
-    /// Creates a request with the default output cap.
+    /// Creates a request with no tools and the default output cap.
     #[must_use]
     pub fn new(system: Option<String>, messages: Vec<Message>) -> Self {
-        Self { system, messages, max_tokens: DEFAULT_MAX_TOKENS }
+        Self { system, messages, tools: Vec::new(), max_tokens: DEFAULT_MAX_TOKENS }
+    }
+
+    /// Offers the given tools to the model.
+    #[must_use]
+    pub fn with_tools(mut self, tools: Vec<ToolSchema>) -> Self {
+        self.tools = tools;
+        self
     }
 }
 
