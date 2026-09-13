@@ -44,3 +44,13 @@ Edition 2024, MSRV 1.88.
   adopted to clear a use-after-free advisory in a transitive dependency. Picking
   the newer compiler over the older dependency is the trade this project will
   keep making.
+
+## Amendment, 2026-09-13 — licensing
+
+Originally released under the Rust ecosystem's customary `MIT OR Apache-2.0`.
+Now **MIT only**, at the maintainer's decision.
+
+The dual licence exists mainly to offer Apache-2.0's explicit patent grant. MIT
+alone is shorter, understood by everyone, and imposes no constraint that matters
+for a project of this size. Contributors should be aware the terms are simply
+MIT; anyone who needs an explicit patent grant should raise it in an issue.
