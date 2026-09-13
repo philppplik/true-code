@@ -295,6 +295,9 @@ fn handle_key(
             Some(Submission::Undo) => {
                 tokio::spawn(undo(agent.clone(), tx.clone()));
             }
+            Some(Submission::Handoff) => {
+                tokio::spawn(handoff(agent.clone(), tx.clone()));
+            }
             Some(Submission::Help) => app.note(App::help_text()),
             None => {}
         },
@@ -316,6 +319,15 @@ async fn undo(agent: Arc<Mutex<Agent>>, tx: mpsc::Sender<AgentEvent>) {
         // A failed undo is reported in full. "Nothing happened" with no reason is
         // the worst possible answer when someone is trying to take a change back.
         Err(err) => err.to_string(),
+    };
+    let _ = tx.send(AgentEvent::Notice { text }).await;
+}
+
+/// Writes a session summary and reports where it went.
+async fn handoff(agent: Arc<Mutex<Agent>>, tx: mpsc::Sender<AgentEvent>) {
+    let text = match agent.lock().await.write_handoff() {
+        Ok(path) => format!("Handoff written to {}", path.display()),
+        Err(err) => format!("Could not write the handoff: {err}"),
     };
     let _ = tx.send(AgentEvent::Notice { text }).await;
 }

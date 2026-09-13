@@ -65,6 +65,8 @@ pub enum Submission {
     Prompt(String),
     /// Undo the most recent change true-code made.
     Undo,
+    /// Write a summary of this session to a file.
+    Handoff,
     /// Show the available commands.
     Help,
 }
@@ -301,6 +303,7 @@ impl App {
 
         match typed.as_str() {
             "/undo" => Some(Submission::Undo),
+            "/handoff" => Some(Submission::Handoff),
             "/help" => Some(Submission::Help),
             // An unrecognised slash command is answered locally rather than sent
             // to the model, which would charge for a confused reply.
@@ -330,8 +333,9 @@ impl App {
     #[must_use]
     pub const fn help_text() -> &'static str {
         "Commands:
-  /undo   revert the last change true-code made
-  /help   this list
+  /undo      revert the last change true-code made
+  /handoff   write a summary of this session to a file
+  /help      this list
 
          Keys: Enter send · Esc abort the running turn · Ctrl+C quit · PgUp/PgDn scroll.
          When a change is proposed: y apply · n skip · a always for this tool · Esc stop."
@@ -677,7 +681,7 @@ mod tests {
 
     #[test]
     fn the_help_text_lists_every_command_submit_accepts() {
-        for command in ["/undo", "/help"] {
+        for command in ["/undo", "/handoff", "/help"] {
             assert!(App::help_text().contains(command), "`{command}` is undocumented");
         }
     }
