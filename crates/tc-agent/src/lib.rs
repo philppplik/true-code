@@ -24,7 +24,11 @@
 //! Every one of these ends the run with a stated reason. The loop never stops
 //! quietly, because a silent stop is indistinguishable from success.
 
+pub mod approval;
 pub mod session;
+
+pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
+pub use tc_tools::{Effect, PermissionMode, Risk};
 
 use std::collections::HashMap;
 
@@ -67,9 +71,40 @@ Two things matter more than being fast:
 2. Explain your reasoning briefly as you go, so the user understands the codebase
    better after your answer than before it.
 
-You currently have read-only tools. You cannot modify files. If the user asks for
-a change, explain precisely what you would change and why, and say that applying
-it is not yet supported.";
+";
+
+/// Mode-specific instructions, appended to [`SYSTEM_PROMPT`].
+///
+/// Appended rather than interpolated, so the cached prefix stays byte-identical.
+/// The mode cannot change within a session, so this is stable too.
+#[must_use]
+pub const fn mode_prompt(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::ReadOnly => {
+            "\nYou have read-only tools and cannot modify anything. If the user asks for a \
+             change, explain exactly what you would change and why, and tell them to restart \
+             with --permission-mode write to apply it."
+        }
+        PermissionMode::Write => {
+            "\nYou can create and edit files in this project. Every change is shown to the user \
+             as a diff and applied only if they agree, so propose the change you actually mean \
+             rather than asking for permission in prose.\n\n\
+             Prefer `patch` over `write_file`: it changes one exact region, so a mistake costs \
+             one hunk instead of a whole file. Read a file before patching it.\n\n\
+             You cannot run commands, so you cannot run the tests. Do not claim a change is \
+             verified when you have not verified it — say what you checked and what you did not."
+        }
+        PermissionMode::Full => {
+            "\nYou can create and edit files in this project and run shell commands. Every \
+             change and every command is shown to the user and applied only if they agree.\n\n\
+             Prefer `patch` over `write_file`: it changes one exact region, so a mistake costs \
+             one hunk instead of a whole file. Read a file before patching it.\n\n\
+             After changing code, run the project's tests and report what actually happened, \
+             including the exit code. A claim of success without evidence is worse than no \
+             claim at all."
+        }
+    }
+}
 
 /// Why a run ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +122,8 @@ pub enum FinishReason {
     },
     /// The answer was cut off by the output token limit.
     OutputTruncated,
+    /// The user declined a change and ended the run.
+    Declined,
 }
 
 impl FinishReason {
@@ -111,6 +148,7 @@ impl FinishReason {
             Self::OutputTruncated => {
                 "The answer was cut off at the output limit — ask for a narrower scope.".to_owned()
             }
+            Self::Declined => "Stopped: you declined the change. Nothing was written.".to_owned(),
         }
     }
 }
@@ -133,6 +171,13 @@ pub enum AgentEvent {
         /// Name of the tool.
         tool: String,
         /// One-line rendering of the arguments, for display.
+        summary: String,
+    },
+    /// A change was proposed and refused by the user.
+    ToolDeclined {
+        /// Name of the tool.
+        tool: String,
+        /// What it would have done.
         summary: String,
     },
     /// A tool finished.
@@ -170,6 +215,10 @@ pub struct Agent {
     schemas: Vec<ToolSchema>,
     system_prompt: String,
     budget: tc_config::Budget,
+    /// Decides whether a mutating tool call may proceed.
+    approver: std::sync::Arc<dyn Approver>,
+    /// Tools the user has approved for the rest of the session.
+    approved_tools: std::collections::HashSet<String>,
     /// Conversation so far, carried across prompts within a session.
     history: Vec<Message>,
     /// Running session total.
@@ -186,6 +235,8 @@ impl Agent {
         tool_ctx: ToolContext,
         config: &Config,
         log: SessionLog,
+        approver: std::sync::Arc<dyn Approver>,
+        mode: PermissionMode,
     ) -> Self {
         let schemas = tools
             .tools()
@@ -202,8 +253,13 @@ impl Agent {
             tools,
             tool_ctx,
             schemas,
-            system_prompt: config.system_prompt.clone().unwrap_or_else(|| SYSTEM_PROMPT.to_owned()),
+            system_prompt: config
+                .system_prompt
+                .clone()
+                .unwrap_or_else(|| format!("{SYSTEM_PROMPT}{}", mode_prompt(mode))),
             budget: config.budget,
+            approver,
+            approved_tools: std::collections::HashSet::new(),
             history: Vec::new(),
             spent: Cost::default(),
             log,
@@ -299,8 +355,15 @@ impl Agent {
                 }
             }
 
-            let results = self.run_tools(&calls, events).await;
-            self.history.push(Message::tool_results(results));
+            match self.run_tools(&calls, events).await {
+                ToolsOutcome::Continue(results) => {
+                    self.history.push(Message::tool_results(results));
+                }
+                ToolsOutcome::Aborted => {
+                    send(events, AgentEvent::Finished { reason: FinishReason::Declined }).await;
+                    return;
+                }
+            }
         }
 
         send(events, AgentEvent::Finished { reason: FinishReason::TurnLimit }).await;
@@ -342,12 +405,72 @@ impl Agent {
         Ok(turn)
     }
 
+    /// Decides whether one call may run, asking the user when it would change
+    /// something.
+    ///
+    /// Returns `None` when the call is cleared to run, or the refusal to report.
+    async fn authorise(
+        &mut self,
+        call: &tc_core::ToolCall,
+        events: &mpsc::Sender<AgentEvent>,
+    ) -> Option<Authorisation> {
+        let effect = match self.tools.preview(&call.name, call.input.clone(), &self.tool_ctx).await
+        {
+            Ok(effect) => effect,
+            // A preview that fails is the call failing: `patch` cannot compute a
+            // diff for a snippet that is not there. Report it like any tool error
+            // so the model can correct itself, and never reach the real call.
+            Err(err) => return Some(Authorisation::Failed(err.to_string())),
+        };
+
+        if !effect.needs_approval() {
+            return None;
+        }
+        // A write that changes nothing is not worth a prompt. Prompts people
+        // learn to dismiss are prompts that have stopped protecting them.
+        if let Effect::Write(diff) = &effect
+            && diff.is_empty()
+        {
+            return None;
+        }
+        if self.approved_tools.contains(&call.name) {
+            return None;
+        }
+
+        let request = ApprovalRequest { tool: call.name.clone(), effect };
+        let summary = request.summary();
+        let decision = self.approver.approve(&request).await;
+
+        self.log.append(EventKind::ApprovalDecided {
+            call_id: call.id.clone(),
+            tool: call.name.clone(),
+            summary: summary.clone(),
+            approved: matches!(decision, Decision::Approve | Decision::ApproveToolForSession),
+        });
+
+        match decision {
+            Decision::Approve => None,
+            Decision::ApproveToolForSession => {
+                self.approved_tools.insert(call.name.clone());
+                None
+            }
+            Decision::Deny | Decision::Abort => {
+                send(events, AgentEvent::ToolDeclined { tool: call.name.clone(), summary }).await;
+                Some(if decision == Decision::Abort {
+                    Authorisation::Aborted
+                } else {
+                    Authorisation::Declined
+                })
+            }
+        }
+    }
+
     /// Runs every tool call of a turn and collects the results.
     async fn run_tools(
         &mut self,
         calls: &[tc_core::ToolCall],
         events: &mpsc::Sender<AgentEvent>,
-    ) -> Vec<ToolResult> {
+    ) -> ToolsOutcome {
         let mut results = Vec::with_capacity(calls.len());
 
         for call in calls {
@@ -356,6 +479,28 @@ impl Agent {
                 tool: call.name.clone(),
                 input: call.input.clone(),
             });
+
+            // Nothing touches the disk before this returns.
+            match self.authorise(call, events).await {
+                None => {}
+                Some(Authorisation::Aborted) => return ToolsOutcome::Aborted,
+                Some(refusal) => {
+                    // Every call still gets a result. A tool call left unanswered
+                    // makes the next request invalid for every provider.
+                    results.push(ToolResult {
+                        call_id: call.id.clone(),
+                        output: refusal.message(),
+                        is_error: true,
+                    });
+                    send(
+                        events,
+                        AgentEvent::ToolFinished { tool: call.name.clone(), is_error: true },
+                    )
+                    .await;
+                    continue;
+                }
+            }
+
             send(
                 events,
                 AgentEvent::ToolStarted {
@@ -385,8 +530,45 @@ impl Agent {
 
             results.push(ToolResult { call_id: call.id.clone(), output, is_error });
         }
-        results
+        ToolsOutcome::Continue(results)
     }
+}
+
+/// Why a call was not run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Authorisation {
+    /// The user said no; the run continues.
+    Declined,
+    /// The user said no and ended the run.
+    Aborted,
+    /// The preview itself failed, so the call could never have worked.
+    Failed(String),
+}
+
+impl Authorisation {
+    /// What the model is told.
+    ///
+    /// A declined change must read as a decision, not a malfunction — otherwise
+    /// the model retries the same edit, and the user gets asked again.
+    fn message(&self) -> String {
+        match self {
+            Self::Declined | Self::Aborted => {
+                "The user declined this change. Do not retry it. Ask what they would prefer \
+                 instead, or continue with the rest of the task."
+                    .to_owned()
+            }
+            Self::Failed(detail) => detail.clone(),
+        }
+    }
+}
+
+/// What running a turn's tools produced.
+#[derive(Debug)]
+enum ToolsOutcome {
+    /// Results to feed back to the model.
+    Continue(Vec<ToolResult>),
+    /// The user ended the run.
+    Aborted,
 }
 
 /// What one model turn produced.
@@ -492,8 +674,27 @@ mod tests {
     }
 
     #[test]
-    fn the_system_prompt_states_the_read_only_limitation() {
-        assert!(SYSTEM_PROMPT.contains("read-only"));
+    fn each_mode_tells_the_model_what_it_can_actually_do() {
+        assert!(mode_prompt(PermissionMode::ReadOnly).contains("cannot modify"));
+        assert!(mode_prompt(PermissionMode::Write).contains("create and edit"));
+        assert!(mode_prompt(PermissionMode::Full).contains("shell commands"));
+    }
+
+    #[test]
+    fn write_mode_admits_it_cannot_run_the_tests() {
+        // The mode has no shell, so a claim of "verified" would be a lie.
+        assert!(mode_prompt(PermissionMode::Write).contains("cannot run the tests"));
+    }
+
+    #[test]
+    fn the_mode_suffix_is_appended_so_the_cached_prefix_stays_stable() {
+        for mode in [PermissionMode::ReadOnly, PermissionMode::Write, PermissionMode::Full] {
+            let full = format!("{SYSTEM_PROMPT}{}", mode_prompt(mode));
+            assert!(
+                full.starts_with(SYSTEM_PROMPT),
+                "the cacheable prefix must come first for every mode"
+            );
+        }
     }
 
     #[test]
