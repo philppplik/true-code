@@ -14,12 +14,14 @@
 //! `docs/adr/0006-secret-storage.md`).
 
 pub mod catalog;
+pub mod secrets;
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use catalog::{ModelInfo, catalog, lookup};
+pub use catalog::{ModelInfo, Vendor, catalog, lookup, vendor};
+pub use secrets::{SecretError, Source};
 
 /// Directory name used for project-local state, inside a repository.
 pub const PROJECT_DIR: &str = ".truecode";
@@ -54,12 +56,9 @@ pub enum ConfigError {
         source: Box<toml::de::Error>,
     },
 
-    /// No API key was found for the selected provider.
-    #[error("no API key found — set {env_var} in your environment")]
-    MissingApiKey {
-        /// Name of the environment variable the user needs to set.
-        env_var: &'static str,
-    },
+    /// No API key was available for the selected provider.
+    #[error(transparent)]
+    MissingApiKey(#[from] SecretError),
 
     /// The configured model is not in the catalogue.
     #[error("unknown model `{0}` — run `true-code models` to list the supported ones")]
@@ -147,18 +146,16 @@ impl Config {
     }
 
     /// Looks up the catalogue entry for the configured model.
-    pub fn model_info(&self) -> Result<&'static ModelInfo, ConfigError> {
+    pub fn model_info(&self) -> Result<ModelInfo, ConfigError> {
         lookup(&self.model).ok_or_else(|| ConfigError::UnknownModel(self.model.clone()))
     }
 
-    /// Reads the API key for the configured model's provider from the environment.
+    /// Reads the API key for the configured model's provider.
+    ///
+    /// Environment first, then the OS keyring. Never a file true-code wrote.
     pub fn api_key(&self) -> Result<String, ConfigError> {
         let info = self.model_info()?;
-        let env_var = info.api_key_env;
-        match std::env::var(env_var) {
-            Ok(key) if !key.trim().is_empty() => Ok(key),
-            _ => Err(ConfigError::MissingApiKey { env_var }),
-        }
+        Ok(secrets::key_for(info.vendor)?.0)
     }
 }
 
