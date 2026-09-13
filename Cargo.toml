@@ -4,6 +4,8 @@ members = [
     "crates/tc-core",
     "crates/tc-config",
     "crates/tc-providers",
+    "crates/tc-tools",
+    "crates/tc-agent",
     "crates/tc-tui",
     "crates/tc-cli",
 ]
@@ -22,6 +24,8 @@ authors = ["true-code contributors"]
 tc-core = { path = "crates/tc-core", version = "0.1.0" }
 tc-config = { path = "crates/tc-config", version = "0.1.0" }
 tc-providers = { path = "crates/tc-providers", version = "0.1.0" }
+tc-tools = { path = "crates/tc-tools", version = "0.1.0" }
+tc-agent = { path = "crates/tc-agent", version = "0.1.0" }
 tc-tui = { path = "crates/tc-tui", version = "0.1.0" }
 
 # Async
@@ -49,11 +53,18 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# Tools — the ripgrep family, so .gitignore is respected by the same rules
+# developers already expect from their own tooling.
+ignore = "0.4"
+globset = "0.4"
+regex = "1"
+
 # Misc
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 directories = "5"
 uuid = { version = "1", features = ["v4", "serde"] }
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

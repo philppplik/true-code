@@ -1,80 +1,107 @@
 //! Headless mode: one prompt in, one answer out.
 //!
 //! Stream separation is the contract here. The answer goes to **stdout** so that
-//! `true-code -p "…" > answer.md` produces exactly the answer. The accounting goes
-//! to **stderr**, so it is visible in a terminal but never contaminates a pipe.
+//! `true-code -p "…" > answer.md` produces exactly the answer. Everything else —
+//! tool activity, accounting, warnings — goes to **stderr**, so it is visible in a
+//! terminal but never contaminates a pipe.
 
 use std::io::Write as _;
 
-use futures::StreamExt as _;
-use tc_config::Config;
-use tc_core::{Delta, Message, StopReason, Usage};
-use tc_providers::{Provider, Request};
+use tc_agent::{Agent, AgentEvent, FinishReason};
+use tc_core::{Cost, Usage};
+use tokio::sync::mpsc;
 
-/// Runs a single turn and prints the answer.
-pub fn run(provider: Box<dyn Provider>, config: &Config, prompt: &str) -> anyhow::Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(run_async(provider, config, prompt))
+/// Exit code used when a guard rail stopped the run before it finished.
+///
+/// Distinct from success so a CI step can tell "answered" from "gave up".
+pub const EXIT_INCOMPLETE: i32 = 2;
+
+/// Runs a single prompt and prints the answer. Returns the process exit code.
+pub fn run(agent: Agent, prompt: &str) -> anyhow::Result<i32> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    runtime.block_on(run_async(agent, prompt))
 }
 
 /// Async body of [`run`].
-async fn run_async(
-    provider: Box<dyn Provider>,
-    config: &Config,
-    prompt: &str,
-) -> anyhow::Result<()> {
-    let request = Request::new(config.system_prompt.clone(), vec![Message::user(prompt)]);
-    let mut stream = provider.stream(request).await?;
+async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
+
+    // The agent runs in its own task so that printing can keep pace with the
+    // stream instead of stalling it. The prompt is owned by the task because a
+    // spawned task outlives this function's borrows.
+    let owned_prompt = prompt.to_owned();
+    let worker = tokio::spawn(async move {
+        agent.run(&owned_prompt, &tx).await;
+        agent
+    });
 
     let mut stdout = std::io::stdout().lock();
     let mut usage = Usage::default();
-    let mut stop_reason = StopReason::EndTurn;
+    let mut cost = Cost::default();
+    let mut exit = 0;
 
-    while let Some(delta) = stream.next().await {
-        match delta? {
-            Delta::Started { .. } => {}
-            Delta::Text { text } => {
+    while let Some(event) = rx.recv().await {
+        match event {
+            AgentEvent::Started { .. } => {}
+
+            AgentEvent::Text { text } => {
                 // Flushed per chunk so a piped consumer sees output as it arrives
-                // instead of waiting for the whole turn.
+                // instead of waiting for the whole run.
                 write!(stdout, "{text}")?;
                 stdout.flush()?;
             }
-            Delta::Completed { stop_reason: reason, usage: turn_usage } => {
-                stop_reason = reason;
-                usage = turn_usage;
+
+            AgentEvent::ToolStarted { tool, summary } => {
+                eprintln!("· {tool} {summary}");
+            }
+
+            AgentEvent::ToolFinished { tool, is_error } => {
+                if is_error {
+                    eprintln!("· {tool} failed");
+                }
+            }
+
+            AgentEvent::TurnCompleted { usage: turn, cost: turn_cost } => {
+                usage = usage.saturating_add(turn);
+                cost = cost.add(turn_cost);
+            }
+
+            AgentEvent::Finished { reason } => {
+                if reason != FinishReason::Completed {
+                    eprintln!("— {}", reason.message());
+                    exit = EXIT_INCOMPLETE;
+                }
+            }
+
+            AgentEvent::Failed { message } => {
+                eprintln!("— failed: {message}");
+                exit = 1;
             }
         }
     }
     writeln!(stdout)?;
 
-    report(provider.as_ref(), usage, stop_reason, config);
-    Ok(())
+    let agent = worker.await?;
+    report(&agent, usage, cost);
+    Ok(exit)
 }
 
 /// Writes the accounting summary to stderr.
-fn report(provider: &dyn Provider, usage: Usage, stop_reason: StopReason, config: &Config) {
-    let cost = provider.price().cost_of(usage);
-
+fn report(agent: &Agent, usage: Usage, cost: Cost) {
     let cache = usage
         .cache_hit_rate()
         .map_or_else(|| "n/a".to_owned(), |rate| format!("{:.0} %", rate * 100.0));
 
     eprintln!(
         "— {} · in {} / out {} · cache {} · {}",
-        provider.id(),
+        agent.model_id(),
         usage.total_input(),
         usage.output_tokens,
         cache,
         cost.display(),
     );
 
-    if stop_reason == StopReason::MaxTokens {
-        eprintln!("— warning: the answer was cut off at the output limit.");
-    }
-    if config.budget.is_exhausted(cost.usd) {
-        eprintln!(
-            "— warning: this single turn already reached the ${:.2} session budget.",
-            config.budget.session_limit_usd
-        );
+    if let Some(path) = agent.log().path() {
+        eprintln!("— session: {}", path.display());
     }
 }

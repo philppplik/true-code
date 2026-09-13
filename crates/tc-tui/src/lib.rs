@@ -2,9 +2,9 @@
 //!
 //! # Two rules this module exists to enforce
 //!
-//! 1. **The event loop never blocks.** Network streaming runs in a separate task and
-//!    reaches the UI through a channel. A slow provider must never freeze the
-//!    keyboard — that is what makes `Esc` trustworthy.
+//! 1. **The event loop never blocks.** The agent runs in a separate task and
+//!    reaches the UI through a channel. A slow provider or a long-running tool
+//!    must never freeze the keyboard — that is what makes `Esc` trustworthy.
 //! 2. **The terminal is always restored.** Raw mode and the alternate screen are
 //!    global terminal state; leaking them on a panic leaves the user with a broken
 //!    shell and no idea why. The panic hook below is installed before raw mode is
@@ -28,10 +28,9 @@ use crossterm::terminal::{
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use tc_agent::{Agent, AgentEvent};
 use tc_config::Config;
-use tc_core::{Delta, Message};
-use tc_providers::{Provider, Request};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::app::{App, Status};
 
@@ -41,35 +40,22 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Lines moved by one page-scroll key press.
 const PAGE_SCROLL: u16 = 10;
 
-/// What the streaming task sends back to the UI.
-#[derive(Debug)]
-enum TurnMessage {
-    /// A normalised increment from the provider.
-    Delta(Delta),
-    /// The turn failed. Errors are shown, not swallowed.
-    Failed(String),
-}
-
 /// Runs the interactive TUI until the user quits.
-pub fn run(provider: Box<dyn Provider>, config: &Config) -> anyhow::Result<()> {
+pub fn run(agent: Agent, config: &Config) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run_async(Arc::from(provider), config))
+    runtime.block_on(run_async(agent, config))
 }
 
 /// Async body of [`run`], kept separate so the terminal guard has a clear scope.
-async fn run_async(provider: Arc<dyn Provider>, config: &Config) -> anyhow::Result<()> {
+async fn run_async(agent: Agent, config: &Config) -> anyhow::Result<()> {
+    let mut app =
+        App::new(agent.model_id().to_owned(), agent.context_window(), agent.price(), config.budget);
+
+    let agent = Arc::new(Mutex::new(agent));
     let mut terminal = TerminalGuard::enter()?;
 
-    let mut app = App::new(
-        provider.id().to_owned(),
-        provider.context_window(),
-        provider.price(),
-        config.budget,
-    );
-    let mut history: Vec<Message> = Vec::new();
-
-    let (tx, mut rx) = mpsc::channel::<TurnMessage>(256);
-    let mut turn: Option<tokio::task::JoinHandle<()>> = None;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
+    let mut run: Option<tokio::task::JoinHandle<()>> = None;
 
     let mut keys = EventStream::new();
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
@@ -84,22 +70,14 @@ async fn run_async(provider: Arc<dyn Provider>, config: &Config) -> anyhow::Resu
         tokio::select! {
             _ = frames.tick() => {}
 
-            Some(message) = rx.recv() => {
-                match message {
-                    TurnMessage::Delta(delta) => {
-                        let completed = matches!(delta, Delta::Completed { .. });
-                        app.apply(delta);
-                        if completed {
-                            if let Some(entry) = app.entries.last() {
-                                history.push(Message::assistant(entry.text.clone()));
-                            }
-                            turn = None;
-                        }
-                    }
-                    TurnMessage::Failed(error) => {
-                        app.report_error(error);
-                        turn = None;
-                    }
+            Some(event) = rx.recv() => {
+                let ends_run = matches!(
+                    event,
+                    AgentEvent::Finished { .. } | AgentEvent::Failed { .. }
+                );
+                app.apply(event);
+                if ends_run {
+                    run = None;
                 }
                 dirty = true;
             }
@@ -107,7 +85,7 @@ async fn run_async(provider: Arc<dyn Provider>, config: &Config) -> anyhow::Resu
             Some(Ok(event)) = keys.next() => {
                 match event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        handle_key(key, &mut app, &mut turn, &mut history, &provider, &tx, config);
+                        handle_key(key, &mut app, &mut run, &agent, &tx);
                     }
                     Event::Paste(text) => {
                         for ch in text.chars().filter(|ch| !ch.is_control()) {
@@ -126,22 +104,19 @@ async fn run_async(provider: Arc<dyn Provider>, config: &Config) -> anyhow::Resu
         }
     }
 
-    if let Some(handle) = turn {
+    if let Some(handle) = run {
         handle.abort();
     }
     Ok(())
 }
 
 /// Applies one key press.
-#[allow(clippy::too_many_arguments)]
 fn handle_key(
     key: KeyEvent,
     app: &mut App,
-    turn: &mut Option<tokio::task::JoinHandle<()>>,
-    history: &mut Vec<Message>,
-    provider: &Arc<dyn Provider>,
-    tx: &mpsc::Sender<TurnMessage>,
-    config: &Config,
+    run: &mut Option<tokio::task::JoinHandle<()>>,
+    agent: &Arc<Mutex<Agent>>,
+    tx: &mpsc::Sender<AgentEvent>,
 ) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -151,7 +126,7 @@ fn handle_key(
         // Dropping the task drops the HTTP stream, which aborts the request.
         // One cancellation mechanism, no half-cancelled state to reason about.
         KeyCode::Esc => {
-            if let Some(handle) = turn.take() {
+            if let Some(handle) = run.take() {
                 handle.abort();
             }
             app.abort();
@@ -159,9 +134,8 @@ fn handle_key(
 
         KeyCode::Enter => {
             if let Some(prompt) = app.submit() {
-                history.push(Message::user(prompt));
-                *turn = Some(spawn_turn(provider.clone(), history.clone(), tx.clone(), config));
-                app.status = Status::Streaming;
+                *run = Some(spawn_run(agent.clone(), prompt, tx.clone()));
+                app.status = Status::Working;
             }
         }
 
@@ -175,34 +149,17 @@ fn handle_key(
     }
 }
 
-/// Spawns the streaming task for one turn.
-fn spawn_turn(
-    provider: Arc<dyn Provider>,
-    history: Vec<Message>,
-    tx: mpsc::Sender<TurnMessage>,
-    config: &Config,
+/// Spawns the agent run for one prompt.
+fn spawn_run(
+    agent: Arc<Mutex<Agent>>,
+    prompt: String,
+    tx: mpsc::Sender<AgentEvent>,
 ) -> tokio::task::JoinHandle<()> {
-    let request = Request::new(config.system_prompt.clone(), history);
-
     tokio::spawn(async move {
-        let mut stream = match provider.stream(request).await {
-            Ok(stream) => stream,
-            Err(err) => {
-                let _ = tx.send(TurnMessage::Failed(err.to_string())).await;
-                return;
-            }
-        };
-
-        while let Some(item) = stream.next().await {
-            let message = match item {
-                Ok(delta) => TurnMessage::Delta(delta),
-                Err(err) => TurnMessage::Failed(err.to_string()),
-            };
-            // A closed receiver means the UI is gone; stop rather than spin.
-            if tx.send(message).await.is_err() {
-                return;
-            }
-        }
+        // Uncontended in practice: the UI refuses a second prompt while one runs.
+        // The lock exists so an aborted task cannot leave the agent half-updated.
+        let mut agent = agent.lock().await;
+        agent.run(&prompt, &tx).await;
     })
 }
 

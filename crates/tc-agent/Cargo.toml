@@ -1,6 +1,6 @@
 [package]
-name = "tc-tui"
-description = "Terminal user interface for true-code: streaming transcript, live cost, instant abort."
+name = "tc-agent"
+description = "The true-code agent loop: turns, tool execution, guard rails and the session log."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,15 +10,19 @@ authors.workspace = true
 
 [dependencies]
 tc-core = { workspace = true }
-tc-agent = { workspace = true }
 tc-config = { workspace = true }
 tc-providers = { workspace = true }
-anyhow = { workspace = true }
-crossterm = { workspace = true }
+tc-tools = { workspace = true }
+async-trait = { workspace = true }
 futures = { workspace = true }
-ratatui = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

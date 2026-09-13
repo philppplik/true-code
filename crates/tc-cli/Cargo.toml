@@ -14,6 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 tc-core = { workspace = true }
+tc-agent = { workspace = true }
+tc-tools = { workspace = true }
 tc-config = { workspace = true }
 tc-providers = { workspace = true }
 tc-tui = { workspace = true }
