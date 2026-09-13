@@ -26,11 +26,13 @@
 
 pub mod approval;
 pub mod checkpoint;
+pub mod learn;
 pub mod proof;
 pub mod session;
 
 pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
 pub use checkpoint::UndoError;
+pub use learn::{Profile, Question};
 pub use proof::{Proof, Verdict};
 pub use tc_tools::{Effect, Ledger, PermissionMode, Risk, Violation};
 
@@ -200,6 +202,14 @@ pub enum AgentEvent {
         /// Money spent on the turn.
         cost: Cost,
     },
+    /// One question about the change that was just made.
+    ///
+    /// Sent after the proof panel, so the user sees what happened before being
+    /// asked about it.
+    Asked {
+        /// The question.
+        question: Box<Question>,
+    },
     /// What the run was observed to do. Sent just before [`AgentEvent::Finished`].
     Proven {
         /// The evidence.
@@ -243,6 +253,10 @@ pub struct Agent {
     ledger: Ledger,
     /// What the current run has been observed to do.
     proof: Proof,
+    /// Whether to ask a comprehension question after a change. Off by default.
+    teaching: bool,
+    /// What this user has met before, and how it went.
+    profile: Profile,
     /// Conversation so far, carried across prompts within a session.
     history: Vec<Message>,
     /// Running session total.
@@ -270,13 +284,30 @@ pub struct AgentSetup {
     pub approver: std::sync::Arc<dyn Approver>,
     /// How much the agent is allowed to do.
     pub mode: PermissionMode,
+    /// Whether to ask a comprehension question after a change.
+    ///
+    /// Off unless asked for. An unrequested quiz after every edit is the fastest
+    /// way to make someone turn a feature off permanently.
+    pub teaching: bool,
+    /// What this user has met before.
+    pub profile: Profile,
 }
 
 impl Agent {
     /// Builds an agent from its setup.
     #[must_use]
     pub fn new(setup: AgentSetup, config: &Config) -> Self {
-        let AgentSetup { provider, tools, tool_ctx, ledger, log, approver, mode } = setup;
+        let AgentSetup {
+            provider,
+            tools,
+            tool_ctx,
+            ledger,
+            log,
+            approver,
+            mode,
+            teaching: setup_teaching,
+            profile,
+        } = setup;
 
         let schemas = tools
             .tools()
@@ -308,6 +339,8 @@ impl Agent {
             ),
             ledger,
             proof: Proof::default(),
+            teaching: setup_teaching,
+            profile,
             history: Vec::new(),
             spent: Cost::default(),
             log,
@@ -430,6 +463,93 @@ impl Agent {
         self.finish(events, FinishReason::TurnLimit).await;
     }
 
+    /// Asks one question about the change, if teaching is on and anything changed.
+    ///
+    /// A separate, deliberately small model call. Folding it into the main turn
+    /// would let the model skip it whenever the conversation got interesting,
+    /// which is exactly when it matters.
+    async fn ask_about_the_change(&mut self, events: &mpsc::Sender<AgentEvent>) {
+        if !self.teaching || self.proof.changed.is_empty() {
+            return;
+        }
+
+        let system = format!("{}{}", learn::QUESTION_PROMPT, self.profile.prompt_section());
+        let changed = self.proof.changed.join(", ");
+        let request = Request::new(
+            Some(system),
+            vec![Message::user(format!(
+                "The change touched: {changed}. Write the question about it."
+            ))],
+        );
+
+        let Ok(mut stream) = self.provider.stream(request).await else {
+            // A failed question is not worth reporting as an error: the work
+            // succeeded, and this is the optional part.
+            return;
+        };
+
+        let mut answer = String::new();
+        while let Some(Ok(delta)) = stream.next().await {
+            match delta {
+                Delta::Text { text } => answer.push_str(&text),
+                Delta::Completed { usage, .. } => {
+                    // Billed and shown like any other call. A feature that spends
+                    // the user's money quietly is exactly what this project is
+                    // supposed to be the opposite of.
+                    let cost = self.provider.price().cost_of(usage);
+                    self.spent = self.spent.add(cost);
+                    send(events, AgentEvent::TurnCompleted { usage, cost }).await;
+                }
+                Delta::Started { .. } | Delta::ToolCall(_) => {}
+            }
+        }
+
+        match Question::parse(&answer) {
+            Ok(question) => {
+                self.log.append(EventKind::Asked {
+                    concept: question.concept.clone(),
+                    question: question.question.clone(),
+                });
+                send(events, AgentEvent::Asked { question: Box::new(question) }).await;
+            }
+            Err(err) => tracing::debug!(error = %err, "no comprehension question this time"),
+        }
+    }
+
+    /// Records how an answer went and returns the feedback to show.
+    ///
+    /// The explanation comes back either way. Someone who guessed correctly has
+    /// learned nothing yet, and the explanation is the part worth keeping.
+    pub fn answer(&mut self, question: &Question, chosen: usize) -> String {
+        let correct = question.is_correct(chosen);
+
+        self.profile.record(&question.concept, correct);
+        if let Err(err) = self.profile.save(self.tool_ctx.root()) {
+            tracing::warn!(error = %err, "could not save the learning profile");
+        }
+
+        self.log.append(EventKind::Answered { concept: question.concept.clone(), correct });
+
+        let opener = if correct { "Right." } else { "Not quite." };
+        let right = question.options.get(question.correct).map_or("", String::as_str);
+
+        if correct {
+            format!(
+                "{opener}
+
+{}",
+                question.explanation
+            )
+        } else {
+            format!(
+                "{opener} The answer was: {right}
+
+{}",
+                question.explanation
+            )
+        }
+    }
+
     /// Ends a run: the evidence first, then why it stopped.
     ///
     /// Every exit goes through here. A run that ends without a panel would let
@@ -439,6 +559,10 @@ impl Agent {
         if !self.proof.is_empty() {
             send(events, AgentEvent::Proven { proof: self.proof.clone() }).await;
         }
+        // After the panel: see what happened, then be asked about it. Never
+        // mid-loop — the moment to interrupt is a commit point, not a tool call.
+        self.ask_about_the_change(events).await;
+
         send(events, AgentEvent::Finished { reason }).await;
     }
 

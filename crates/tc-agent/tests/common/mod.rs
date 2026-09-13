@@ -128,6 +128,31 @@ pub fn agent_with(
     agent_with_ledger(provider, mode, root, config, approver, Ledger::default())
 }
 
+/// Builds an agent with the comprehension check on or off.
+pub fn agent_with_learning(
+    provider: Arc<dyn Provider>,
+    mode: PermissionMode,
+    root: &std::path::Path,
+    config: &Config,
+    approver: Arc<dyn Approver>,
+    teaching: bool,
+) -> Agent {
+    Agent::new(
+        AgentSetup {
+            provider,
+            tools: ToolSet::for_mode(mode),
+            tool_ctx: ToolContext::new(root),
+            ledger: Ledger::default(),
+            log: SessionLog::create(root, SessionId::new()),
+            approver,
+            mode,
+            teaching,
+            profile: tc_agent::Profile::load(root).unwrap_or_default(),
+        },
+        config,
+    )
+}
+
 /// Builds an agent with a specific set of project rules.
 pub fn agent_with_ledger(
     provider: Arc<dyn Provider>,
@@ -146,6 +171,8 @@ pub fn agent_with_ledger(
             log: SessionLog::create(root, SessionId::new()),
             approver,
             mode,
+            teaching: false,
+            profile: tc_agent::Profile::default(),
         },
         config,
     )

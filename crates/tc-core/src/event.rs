@@ -125,6 +125,23 @@ pub enum EventKind {
         /// walk backwards correctly through repeated edits to the same file.
         checkpoint_seq: u64,
     },
+    /// A comprehension question was put to the user.
+    Asked {
+        /// The concept it was about.
+        concept: String,
+        /// The question itself.
+        question: String,
+    },
+    /// The user answered a comprehension question.
+    ///
+    /// Recorded so the profile can be rebuilt from the log, and so "I was asked
+    /// and got it wrong" is not quietly lost.
+    Answered {
+        /// The concept it was about.
+        concept: String,
+        /// Whether they got it right.
+        correct: bool,
+    },
     /// A tool finished.
     ToolCompleted {
         /// Identifier of the matching [`EventKind::ToolCalled`].
