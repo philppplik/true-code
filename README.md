@@ -44,6 +44,9 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 - **Guard rails that stop with a reason** — turn limit, session budget, and loop
   detection for an agent repeating itself. No silent stops.
 - **Live token and cost accounting**, with a budget that actually halts the run.
+- **It can teach you what it just did.** `--learn` ends a change with one
+  question about it, and an explanation you keep
+  ([ADR 0010](docs/adr/0010-comprehension-check.md)).
 - **Evidence instead of "done".** Every run ends with what the harness *observed*:
   files changed, commands run, exit codes. Changed code that nothing checked is
   reported as **UNVERIFIED**, in red
@@ -179,6 +182,34 @@ truecode verify   # run this project's build, tests and lint
 
 It works out the commands from the project's shape, so it needs no configuration.
 In headless mode an alarming verdict exits non-zero.
+
+### Understanding what it built
+
+Heavy AI use measurably erodes your grasp of your own codebase: developers who
+mostly generate score worse on comprehension tests, and most maintenance of
+agent-written code is done by humans afterwards. Nobody addresses this, because
+learning is not measurable in benchmarks and it *reduces* token consumption.
+
+```bash
+truecode --learn
+```
+
+After a change, one question about that change — then the explanation, whether
+you got it right or not. Someone who guessed correctly has learned nothing yet.
+
+```bash
+truecode learn    # what you have been asked, and how it went
+```
+
+No score, no streak, no badges: gamification measurably lowered both intrinsic
+motivation and exam performance. The profile tracks which concepts you have met
+and how you did, and feeds that back so the next question prefers something you
+have struggled with. That is differentiation on **prior knowledge** — the
+predictor that works — rather than on a "learning style", which is a neuromyth
+(d = 0.04 across four meta-analyses).
+
+It is off unless you ask for it, it fires only at the end of a run, and it never
+blocks anything.
 
 ### Project rules
 

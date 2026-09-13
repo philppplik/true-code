@@ -42,8 +42,6 @@ async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
 
     while let Some(event) = rx.recv().await {
         match event {
-            AgentEvent::Started { .. } => {}
-
             AgentEvent::Text { text } => {
                 // Flushed per chunk so a piped consumer sees output as it arrives
                 // instead of waiting for the whole run.
@@ -77,6 +75,11 @@ async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
             // On stderr like all non-answer output, but always printed: a piped
             // run that reports success without evidence is the failure this
             // whole feature exists to prevent.
+            // Nothing to print: the model name is already in the accounting line,
+            // and headless never asks a question because there is nobody to
+            // answer — `--learn` is refused there.
+            AgentEvent::Started { .. } | AgentEvent::Asked { .. } => {}
+
             AgentEvent::Proven { proof } => {
                 eprint!("{}", proof.render());
                 if proof.verdict().is_alarming() {

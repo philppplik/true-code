@@ -2384,6 +2384,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "serde",
  "serde_json",
  "tc-config",
  "tc-core",
@@ -2392,6 +2393,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
 ]
 
