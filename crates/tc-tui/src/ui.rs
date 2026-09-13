@@ -49,7 +49,52 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // behind other content is not a confirmation.
     if let Some(pending) = &app.pending {
         draw_approval(frame, frame.area(), pending);
+    } else if let Some(question) = &app.question {
+        draw_question(frame, frame.area(), question);
     }
+}
+
+/// Draws the comprehension question.
+///
+/// No score, no streak, no badge: gamification measurably lowered both intrinsic
+/// motivation and exam performance. This is a question and an explanation.
+fn draw_question(frame: &mut Frame, area: Rect, question: &tc_agent::Question) {
+    let modal = centred(area, MODAL_WIDTH_PERCENT, MODAL_HEIGHT_PERCENT);
+    frame.render_widget(Clear, modal);
+
+    let mut lines = vec![
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!("  {}", question.question),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+    ];
+
+    for (index, option) in question.options.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {}  ", index + 1),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(option.clone(), Style::default().fg(Color::White)),
+        ]));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            format!(" {} ", question.concept),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Line::from(Span::styled(
+            "  Press a number to answer  ·  Esc to skip  ",
+            Style::default().fg(Color::White),
+        )));
+
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), modal);
 }
 
 /// Share of the screen the confirmation modal occupies, in percent.

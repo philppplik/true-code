@@ -31,6 +31,7 @@ const EXAMPLES: &str = "Examples:
   truecode                                 start a session (read-only)
   truecode --permission-mode write         let it edit files, with confirmation
   truecode --permission-mode full          let it run commands too
+  truecode --learn                         ask me one question after each change
   truecode -p \"what does src/lib.rs do?\"   one question, answer on stdout
 
   truecode auth login openrouter           store a key (anthropic | openai | openrouter)
@@ -38,6 +39,7 @@ const EXAMPLES: &str = "Examples:
   truecode verify                          run this project's build, tests and lint
   truecode undo                            revert the last change it made
   truecode constraints                     show the project rules in force
+  truecode learn                           what you have been asked, and how it went
 
 First run? `truecode doctor` tells you what is missing.";
 
@@ -70,6 +72,13 @@ struct Cli {
     #[arg(long, value_name = "MODE", default_value = "read-only")]
     permission_mode: String,
 
+    /// After a change, ask one question about it.
+    ///
+    /// Off by default. Heavy AI use measurably erodes understanding of your own
+    /// codebase; this is the only lever that reliably works against that.
+    #[arg(long)]
+    learn: bool,
+
     /// Approve every change without asking. Headless mode only.
     ///
     /// Without it, `-p` refuses changes, because there is nobody to ask.
@@ -99,6 +108,8 @@ enum Command {
     ///
     /// What `unverified` in the proof panel tells you to reach for.
     Verify,
+    /// Show what you have been asked about, and how it went.
+    Learn,
     /// Store, check or remove an API key.
     Auth {
         #[command(subcommand)]
@@ -143,6 +154,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         Some(Command::Constraints) => print_constraints(&cwd)?,
         Some(Command::Auth { action }) => auth(&action)?,
+        Some(Command::Learn) => print_learning(&cwd)?,
         Some(Command::Verify) => {
             if !verify(&cwd)? {
                 std::process::exit(1);
@@ -172,7 +184,11 @@ fn main() -> anyhow::Result<()> {
 
             // A guard rail that stopped the run is not a crash, but it is also not
             // a success — scripts need to be able to tell the difference.
-            let code = start_session(&config, &cwd, mode, cli.prompt, cli.yes)?;
+            if cli.learn && cli.prompt.is_some() {
+                anyhow::bail!("--learn needs an interactive session; there is nobody to ask in -p");
+            }
+
+            let code = start_session(&config, &cwd, mode, cli.prompt, cli.yes, cli.learn)?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -188,6 +204,7 @@ fn start_session(
     mode: PermissionMode,
     prompt: Option<String>,
     auto_approve: bool,
+    teaching: bool,
 ) -> anyhow::Result<i32> {
     let info = config.model_info()?;
 
@@ -224,6 +241,8 @@ fn start_session(
             log,
             approver,
             mode,
+            teaching: false,
+            profile: tc_agent::Profile::default(),
         };
         return headless::run(Agent::new(setup, config), &prompt);
     }
@@ -237,6 +256,10 @@ fn start_session(
         log,
         approver,
         mode,
+        teaching,
+        // What this person has met before, so the question can prefer something
+        // they have struggled with rather than starting from nothing each time.
+        profile: tc_agent::Profile::load(cwd)?,
     };
     tc_tui::run(Agent::new(setup, config), config, mode, approvals).map(|()| 0)
 }
@@ -298,6 +321,38 @@ fn first_run_setup(vendor: &'static tc_config::Vendor) -> Option<String> {
         return None;
     }
     Some(chosen.key)
+}
+
+/// Prints the learning profile.
+///
+/// No score and no streak, on purpose: gamification measurably lowered both
+/// intrinsic motivation and exam performance. Counts and a nudge, nothing more.
+fn print_learning(cwd: &Path) -> anyhow::Result<()> {
+    let profile = tc_agent::Profile::load(cwd)?;
+
+    if profile.concepts.is_empty() {
+        println!(
+            "Nothing recorded yet. Run `truecode --learn` and it will ask one question \
+             after each change it makes."
+        );
+        return Ok(());
+    }
+
+    println!("{:<28} {:>6} {:>8}", "CONCEPT", "ASKED", "RIGHT");
+    for (concept, record) in &profile.concepts {
+        println!("{concept:<28} {:>6} {:>8}", record.seen, record.correct);
+    }
+
+    let weak = profile.weak_spots();
+    if !weak.is_empty() {
+        let names: Vec<&str> = weak.iter().map(|(name, _)| *name).collect();
+        println!(
+            "
+Worth coming back to: {}",
+            names.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// Stores, reports on, or removes API keys.

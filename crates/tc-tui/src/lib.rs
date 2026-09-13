@@ -147,6 +147,11 @@ async fn run_async(
                     // While a change is on screen it owns the keyboard. Typing a
                     // prompt into a confirmation is how people approve things
                     // they never read.
+                    Event::Key(key)
+                        if key.kind == KeyEventKind::Press && app.question.is_some() =>
+                    {
+                        answer_question(key, &mut app, &agent, &tx);
+                    }
                     Event::Key(key) if key.kind == KeyEventKind::Press && answer.is_some() => {
                         if let Some(decision) = decide(key, &mut app) {
                             if let Some(reply) = answer.take() {
@@ -179,6 +184,46 @@ async fn run_async(
         handle.abort();
     }
     Ok(())
+}
+
+/// Interprets a key press while a comprehension question is up.
+///
+/// Answering is one keystroke, and skipping is one keystroke. A check that is
+/// laborious to dismiss is a check people disable.
+fn answer_question(
+    key: KeyEvent,
+    app: &mut App,
+    agent: &Arc<Mutex<Agent>>,
+    tx: &mpsc::Sender<AgentEvent>,
+) {
+    let Some(question) = app.question.clone() else {
+        return;
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            // Skipping records nothing. A skipped question is not a wrong answer,
+            // and counting it as one would make the profile lie.
+            app.clear_question();
+        }
+        KeyCode::Char(ch) if ch.is_ascii_digit() => {
+            let chosen = ch.to_digit(10).unwrap_or(0) as usize;
+            if chosen == 0 || chosen > question.options.len() {
+                return;
+            }
+            app.clear_question();
+
+            let agent = agent.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let feedback = agent.lock().await.answer(&question, chosen - 1);
+                // Into the transcript, not a dialog: an explanation that scrolls
+                // away is learning effort thrown out.
+                let _ = tx.send(AgentEvent::Notice { text: feedback }).await;
+            });
+        }
+        _ => {}
+    }
 }
 
 /// Interprets a key press while a change is awaiting confirmation.

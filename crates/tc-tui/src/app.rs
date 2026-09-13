@@ -3,7 +3,7 @@
 //! Deliberately free of `ratatui` and `crossterm` types so that the state machine
 //! can be unit-tested without a terminal. Rendering reads this; it never owns it.
 
-use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode, Proof};
+use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode, Proof, Question};
 use tc_config::Budget;
 use tc_core::{Cost, Price, Usage};
 
@@ -113,6 +113,8 @@ pub struct App {
     pub rules: usize,
     /// A change waiting for confirmation. While set, it owns the keyboard.
     pub pending: Option<PendingApproval>,
+    /// A comprehension question waiting for an answer.
+    pub question: Option<Question>,
     /// Set once the user asked to quit.
     pub should_quit: bool,
 }
@@ -132,6 +134,7 @@ impl App {
             mode,
             rules,
             pending: None,
+            question: None,
             entries: Vec::new(),
             input: String::new(),
             cursor: 0,
@@ -182,6 +185,8 @@ impl App {
             }
 
             AgentEvent::Proven { proof } => self.entries.push(Entry::Proof(proof)),
+
+            AgentEvent::Asked { question } => self.question = Some(*question),
 
             AgentEvent::Finished { reason } => self.finish(&reason),
 
@@ -308,6 +313,11 @@ impl App {
                 Some(Submission::Prompt(typed))
             }
         }
+    }
+
+    /// Clears the question once it has been answered.
+    pub fn clear_question(&mut self) {
+        self.question = None;
     }
 
     /// Records a local message in the transcript.
@@ -637,6 +647,24 @@ mod tests {
         app.apply(AgentEvent::Proven { proof: proof.clone() });
 
         assert_eq!(app.entries, vec![Entry::Proof(proof)]);
+    }
+
+    #[test]
+    fn a_question_takes_over_until_it_is_answered() {
+        let mut app = test_app();
+        let question = Question {
+            concept: "error propagation".to_owned(),
+            question: "What breaks?".to_owned(),
+            options: vec!["a".to_owned(), "b".to_owned()],
+            correct: 1,
+            explanation: "because".to_owned(),
+        };
+
+        app.apply(AgentEvent::Asked { question: Box::new(question.clone()) });
+        assert_eq!(app.question, Some(question));
+
+        app.clear_question();
+        assert!(app.question.is_none());
     }
 
     #[test]
