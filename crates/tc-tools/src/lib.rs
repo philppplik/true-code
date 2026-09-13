@@ -25,12 +25,14 @@ pub mod fs;
 pub mod path;
 pub mod search;
 pub mod shell;
+pub mod verify;
 
 use std::path::{Path, PathBuf};
 
 pub use constraints::{Constraint, ConstraintError, Ledger, Violation};
 pub use diff::{ChangeKind, FileDiff};
 pub use path::PathError;
+pub use verify::{Check, CheckKind, Profile};
 
 /// Errors a tool can return.
 ///

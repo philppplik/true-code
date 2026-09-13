@@ -186,6 +186,25 @@ fn spawn(command: &str, ctx: &ToolContext) -> Result<tokio::process::Child, Tool
         .map_err(|source| ToolError::Io { operation: "start", path: command.to_owned(), source })
 }
 
+/// Prefix of the line carrying a command's exit code.
+///
+/// Written by [`render_output`] and read back by [`parse_exit_code`]. The two live
+/// next to each other, and a test asserts they agree — a parser that drifts from
+/// its formatter would silently stop finding evidence and report "unverified" for
+/// commands that actually ran.
+const EXIT_PREFIX: &str = "exit code: ";
+
+/// Reads the exit code back out of a rendered shell result.
+///
+/// Returns `None` for output this module did not produce.
+#[must_use]
+pub fn parse_exit_code(output: &str) -> Option<i32> {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(EXIT_PREFIX))
+        .and_then(|code| code.trim().parse().ok())
+}
+
 /// Formats a finished command for the model.
 ///
 /// The exit code is always stated. A failed build whose output *looks* fine is
@@ -336,6 +355,41 @@ mod tests {
             }
             other => panic!("expected a high-risk effect, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn the_exit_code_can_be_read_back_out_of_the_rendered_output() {
+        let (_dir, ctx) = project();
+
+        // The round trip is the contract the proof panel depends on: if this
+        // breaks, real evidence is silently reported as "unverified".
+        let output = Shell
+            .run(serde_json::json!({ "command": "exit 7" }), &ctx)
+            .await
+            .expect("a non-zero exit is still a successful tool call");
+
+        assert_eq!(parse_exit_code(&output), Some(7));
+    }
+
+    #[tokio::test]
+    async fn a_successful_command_reports_exit_zero_to_the_parser() {
+        let (_dir, ctx) = project();
+
+        let output =
+            Shell.run(serde_json::json!({ "command": ECHO }), &ctx).await.expect("it runs");
+
+        assert_eq!(parse_exit_code(&output), Some(0));
+    }
+
+    #[test]
+    fn output_from_somewhere_else_yields_no_exit_code() {
+        assert_eq!(parse_exit_code("tests: 47 passed"), None);
+        assert_eq!(parse_exit_code(""), None);
+    }
+
+    #[test]
+    fn a_malformed_exit_line_is_not_guessed_at() {
+        assert_eq!(parse_exit_code("exit code: not-a-number"), None);
     }
 
     #[test]
