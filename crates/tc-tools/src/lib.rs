@@ -18,6 +18,7 @@
 //! 3. **Failure is a value, not a panic.** Tool errors go back to the model as
 //!    text; that feedback loop is how an agent recovers.
 
+pub mod constraints;
 pub mod diff;
 pub mod edit;
 pub mod fs;
@@ -27,6 +28,7 @@ pub mod shell;
 
 use std::path::{Path, PathBuf};
 
+pub use constraints::{Constraint, ConstraintError, Ledger, Violation};
 pub use diff::{ChangeKind, FileDiff};
 pub use path::PathError;
 

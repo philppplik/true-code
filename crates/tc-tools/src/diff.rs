@@ -40,6 +40,13 @@ pub struct FileDiff {
     pub added: usize,
     /// Number of lines removed.
     pub removed: usize,
+    /// Every line this change adds, without its trailing newline.
+    ///
+    /// Kept as data rather than read back out of [`Self::text`], which is
+    /// truncated for display. A constraint check over the rendered text would
+    /// silently miss violations past the cut — the worst kind of check, because
+    /// it reports a clean result.
+    pub added_lines: Vec<String>,
 }
 
 impl FileDiff {
@@ -51,18 +58,21 @@ impl FileDiff {
 
         let diff = TextDiff::from_lines(before, after);
 
-        let mut added = 0;
+        let mut added_lines = Vec::new();
         let mut removed = 0;
         for change in diff.iter_all_changes() {
             match change.tag() {
-                ChangeTag::Insert => added += 1,
+                ChangeTag::Insert => {
+                    // Trailing whitespace is noise for a constraint regex.
+                    added_lines.push(change.value().trim_end().to_owned());
+                }
                 ChangeTag::Delete => removed += 1,
                 ChangeTag::Equal => {}
             }
         }
 
         let text = render(&diff);
-        Self { path: path.into(), kind, text, added, removed }
+        Self { path: path.into(), kind, text, added: added_lines.len(), removed, added_lines }
     }
 
     /// A one-line summary, e.g. `src/lib.rs  +12 −3`.
@@ -174,6 +184,34 @@ mod tests {
 
         assert!(diff.text.contains('…'), "far-apart hunks must be separated: {}", diff.text);
         assert!(!diff.text.contains("line 50"), "untouched regions must be omitted");
+    }
+
+    #[test]
+    fn added_lines_are_captured_verbatim_without_the_diff_marker() {
+        let diff = FileDiff::new(
+            "a.rs",
+            Some(
+                "keep
+",
+            ),
+            "keep
+let x = y.unwrap();
+",
+        );
+
+        assert_eq!(diff.added_lines, vec!["let x = y.unwrap();".to_owned()]);
+    }
+
+    #[test]
+    fn added_lines_survive_truncation_of_the_rendered_text() {
+        // The rendered diff is capped for display; the data a constraint check
+        // reads must not be.
+        let after = numbered_lines(5_000);
+        let diff = FileDiff::new("huge.txt", Some(""), &after);
+
+        assert!(diff.text.contains("truncated"));
+        assert_eq!(diff.added_lines.len(), 5_000, "checks must see every added line");
+        assert_eq!(diff.added_lines[4_999], "line 4999");
     }
 
     #[test]
