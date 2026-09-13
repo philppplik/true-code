@@ -18,12 +18,16 @@
 //! 3. **Failure is a value, not a panic.** Tool errors go back to the model as
 //!    text; that feedback loop is how an agent recovers.
 
+pub mod diff;
+pub mod edit;
 pub mod fs;
 pub mod path;
 pub mod search;
+pub mod shell;
 
 use std::path::{Path, PathBuf};
 
+pub use diff::{ChangeKind, FileDiff};
 pub use path::PathError;
 
 /// Errors a tool can return.
@@ -141,6 +145,96 @@ pub fn truncate_to(output: String, limit: usize) -> String {
     )
 }
 
+/// How alarming a command should look at the confirmation prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Risk {
+    /// Nothing unusual — a build, a test, a status check.
+    Normal,
+    /// Plausibly destructive or outward-facing.
+    High {
+        /// Why, in a few words, e.g. "publishes to a remote".
+        reason: String,
+    },
+}
+
+/// What a tool call would do, computed before it does it.
+///
+/// This is what the confirmation prompt is built from. Producing it is a dry run
+/// over the same code path as the real call, not a second implementation that can
+/// drift away from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    /// Nothing changes; no approval needed.
+    ReadOnly,
+    /// A file would be created or modified.
+    Write(FileDiff),
+    /// A command would run.
+    Execute {
+        /// The command line.
+        command: String,
+        /// How alarming it is.
+        risk: Risk,
+    },
+}
+
+impl Effect {
+    /// Whether this effect requires a human decision.
+    #[must_use]
+    pub const fn needs_approval(&self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
+
+    /// A one-line description for a prompt or a log.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            Self::ReadOnly => String::new(),
+            Self::Write(diff) => diff.summary(),
+            Self::Execute { command, .. } => format!("run `{command}`"),
+        }
+    }
+}
+
+/// How much the agent is allowed to do.
+///
+/// Three levels rather than a single on/off switch, because the three capabilities
+/// carry genuinely different risk: reading cannot hurt you, editing is reversible
+/// through version control, and running commands is neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionMode {
+    /// Read and search only. The default, and the only mode with no confirmations.
+    #[default]
+    ReadOnly,
+    /// Adds file creation and editing, confined to the workspace. Every change is
+    /// shown as a diff and confirmed.
+    Write,
+    /// Adds running shell commands. Every command is confirmed.
+    Full,
+}
+
+impl PermissionMode {
+    /// The name used on the command line and in the status bar.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Write => "write",
+            Self::Full => "full",
+        }
+    }
+
+    /// Parses a mode from a command-line value.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "read-only" | "readonly" | "read" => Some(Self::ReadOnly),
+            "write" => Some(Self::Write),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 /// A capability the model can invoke.
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync + std::fmt::Debug {
@@ -161,6 +255,19 @@ pub trait Tool: Send + Sync + std::fmt::Debug {
     /// Read-only tools need no approval, which is what makes a read-only agent
     /// usable without a permission prompt on every step.
     fn is_read_only(&self) -> bool;
+
+    /// Describes what this call would do, without doing it.
+    ///
+    /// Read-only tools inherit the default and are never previewed. Mutating tools
+    /// override it, and the agent refuses to run them until a human has seen the
+    /// result and agreed.
+    async fn preview(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<Effect, ToolError> {
+        Ok(Effect::ReadOnly)
+    }
 
     /// Runs the tool.
     async fn run(&self, input: serde_json::Value, ctx: &ToolContext) -> Result<String, ToolError>;
@@ -189,6 +296,44 @@ impl ToolSet {
             Box::new(fs::Glob),
             Box::new(search::Grep),
         ])
+    }
+
+    /// The tools available in a given permission mode.
+    ///
+    /// A tool the mode does not permit is not offered to the model at all, rather
+    /// than offered and then refused. Advertising a capability only to reject
+    /// every call wastes context on the schema and turns the model's next few
+    /// turns into guesswork about why it failed.
+    #[must_use]
+    pub fn for_mode(mode: PermissionMode) -> Self {
+        let mut tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(fs::ReadFile),
+            Box::new(fs::ListDir),
+            Box::new(fs::Glob),
+            Box::new(search::Grep),
+        ];
+
+        if matches!(mode, PermissionMode::Write | PermissionMode::Full) {
+            tools.push(Box::new(edit::WriteFile));
+            tools.push(Box::new(edit::Patch));
+        }
+        if mode == PermissionMode::Full {
+            tools.push(Box::new(shell::Shell));
+        }
+        Self::new(tools)
+    }
+
+    /// Previews a named tool call.
+    pub async fn preview(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<Effect, ToolError> {
+        match self.get(name) {
+            Some(tool) => tool.preview(input, ctx).await,
+            None => Err(ToolError::Unknown(name.to_owned())),
+        }
     }
 
     /// Every tool in the set.
@@ -294,6 +439,74 @@ mod tests {
             .await
             .expect_err("the tool does not exist");
         assert!(matches!(error, ToolError::Unknown(_)));
+    }
+
+    #[test]
+    fn read_only_mode_offers_no_way_to_change_anything() {
+        let set = ToolSet::for_mode(PermissionMode::ReadOnly);
+        assert!(set.get("write_file").is_none());
+        assert!(set.get("patch").is_none());
+        assert!(set.get("shell").is_none());
+        assert!(set.get("read_file").is_some());
+    }
+
+    #[test]
+    fn write_mode_adds_editing_but_not_command_execution() {
+        let set = ToolSet::for_mode(PermissionMode::Write);
+        assert!(set.get("write_file").is_some());
+        assert!(set.get("patch").is_some());
+        assert!(set.get("shell").is_none(), "running commands needs the full mode");
+    }
+
+    #[test]
+    fn full_mode_adds_the_shell() {
+        assert!(ToolSet::for_mode(PermissionMode::Full).get("shell").is_some());
+    }
+
+    #[test]
+    fn every_mutating_tool_is_absent_from_the_read_only_set() {
+        for tool in ToolSet::for_mode(PermissionMode::ReadOnly).tools() {
+            assert!(tool.is_read_only(), "`{}` can modify state", tool.name());
+        }
+    }
+
+    #[test]
+    fn permission_modes_round_trip_through_their_labels() {
+        for mode in [PermissionMode::ReadOnly, PermissionMode::Write, PermissionMode::Full] {
+            assert_eq!(PermissionMode::parse(mode.label()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn an_unknown_permission_mode_is_rejected_rather_than_defaulted() {
+        // Silently falling back to a *more* permissive mode on a typo would be a
+        // security bug; falling back to a less permissive one would be confusing.
+        assert_eq!(PermissionMode::parse("yolo"), None);
+    }
+
+    #[test]
+    fn the_default_mode_is_the_safe_one() {
+        assert_eq!(PermissionMode::default(), PermissionMode::ReadOnly);
+    }
+
+    #[test]
+    fn only_mutating_effects_need_approval() {
+        assert!(!Effect::ReadOnly.needs_approval());
+        assert!(Effect::Execute { command: "ls".to_owned(), risk: Risk::Normal }.needs_approval());
+        assert!(
+            Effect::Write(FileDiff::new("a.rs", None, "x\n")).needs_approval(),
+            "a write must never apply itself"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_tools_preview_as_harmless() {
+        let ctx = ToolContext::new(".");
+        let effect = ToolSet::read_only()
+            .preview("list_dir", serde_json::json!({}), &ctx)
+            .await
+            .expect("the preview succeeds");
+        assert_eq!(effect, Effect::ReadOnly);
     }
 
     #[test]
