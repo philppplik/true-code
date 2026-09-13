@@ -28,7 +28,7 @@ const DONE: &str = "[DONE]";
 /// Client for OpenAI's Chat Completions API.
 #[derive(Debug)]
 pub struct OpenAi {
-    info: &'static ModelInfo,
+    info: ModelInfo,
     api_key: String,
     http: reqwest::Client,
 }
@@ -36,7 +36,7 @@ pub struct OpenAi {
 impl OpenAi {
     /// Creates a client for the given catalogue entry.
     #[must_use]
-    pub fn new(info: &'static ModelInfo, api_key: String) -> Self {
+    pub fn new(info: ModelInfo, api_key: String) -> Self {
         Self { info, api_key, http: reqwest::Client::new() }
     }
 }
@@ -44,7 +44,7 @@ impl OpenAi {
 #[async_trait::async_trait]
 impl Provider for OpenAi {
     fn id(&self) -> &str {
-        self.info.id
+        &self.info.id
     }
 
     fn context_window(&self) -> u32 {
@@ -52,15 +52,15 @@ impl Provider for OpenAi {
     }
 
     fn price(&self) -> Price {
-        self.info.price
+        self.info.price_or_free()
     }
 
     async fn stream(&self, request: Request) -> Result<DeltaStream, ProviderError> {
-        let body = build_body(self.info.api_model, &request);
+        let body = build_body(&self.info.api_model, &request);
 
         let response = self
             .http
-            .post(format!("{}/v1/chat/completions", self.info.base_url))
+            .post(format!("{}/v1/chat/completions", self.info.vendor.base_url))
             .bearer_auth(&self.api_key)
             .json(&body)
             .send()

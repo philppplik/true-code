@@ -10,6 +10,28 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **OpenRouter support**, and with it every model OpenRouter proxies — including
+  ones newer than this build, because any `openrouter/<vendor>/<model>` resolves
+  rather than only a fixed list. A model true-code cannot price reports **no
+  cost** rather than a guessed one.
+- **`truecode auth`** — `login`, `status`, `logout`. Keys go into the OS keyring
+  (Credential Manager, Keychain, Secret Service), never into a file true-code
+  wrote, and are read without echo so they miss your shell history.
+- **A first-run setup screen.** Starting `truecode` with no key now asks which
+  provider to use and takes the key in a masked field, instead of dead-ending on
+  "set an environment variable".
+- `openai/gpt-4.1` added to the catalogue alongside `gpt-4.1-mini`.
+
+### Changed
+
+- Model resolution returns an owned `ModelInfo` rather than a `&'static` one, so
+  a gateway's catalogue is not limited to what was compiled in. Pre-1.0 breaking
+  change to the library API.
+- Environment variables still take precedence over the keyring, so CI stays
+  predictable and a temporary override needs no cleanup.
+
+### Earlier in this cycle
+
 - **The proof panel.** Every run now ends with what the harness *observed* —
   files changed, verification commands run, their exit codes — and a verdict
   derived from those facts rather than from the model's summary. Changed code

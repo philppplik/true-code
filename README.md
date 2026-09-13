@@ -57,8 +57,9 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
   ([ADR 0007](docs/adr/0007-undo-from-the-event-log.md)).
 - **Append-only session log** in `.truecode/sessions/`, recording what ran, what
   you allowed, and what can still be taken back.
-- **Model-neutral provider layer** (Anthropic and OpenAI wire protocols),
-  including tool calls and prompt-cache accounting on both.
+- **Three providers, one key each — or one key for all of them.** Anthropic,
+  OpenAI and OpenRouter, with tool calls and prompt-cache accounting on every
+  one. Any model OpenRouter proxies works, including ones newer than this build.
 - **Headless mode** (`-p`) for scripts and CI.
 
 Not yet built: OS sandboxing, MCP, the LEARN mode.
@@ -84,11 +85,23 @@ cargo install --path crates/tc-cli
 That puts **`truecode`** on your `PATH`. Then:
 
 ```bash
-truecode doctor
+truecode
 ```
 
-which checks the model, your API key, the project rules and whether the session
-directory is writable, and names whatever is missing.
+On a first run it asks which provider you want and lets you paste a key, which
+goes into your OS keyring — never into a file. Or do it up front:
+
+```bash
+truecode auth login openrouter    # or: anthropic, openai
+truecode doctor                   # checks model, key, rules, session directory
+```
+
+**OpenRouter gives you every vendor with one key**, which is the least painful
+place to start:
+
+```bash
+truecode --model openrouter/anthropic/claude-sonnet-4.5
+```
 
 Step-by-step, including Windows specifics and what to do when something goes
 wrong: **[docs/INSTALL.md](docs/INSTALL.md)**.
