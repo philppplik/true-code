@@ -61,33 +61,67 @@ cargo build --release
 
 </details>
 
-## 3. Set an API key
+## 3. Choose a provider and add a key
 
-Keys are read from the **environment only** — never from a config file, so a
-config you commit can never leak a credential.
+**The easy way** — just start it:
 
-**Windows (PowerShell), for this session**
-
-```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```bash
+truecode
 ```
 
-**Windows, permanently**
+On a first run with no key, true-code asks which provider to use and lets you
+paste a key. It is stored in your **operating system's keyring** — Credential
+Manager on Windows, Keychain on macOS, Secret Service on Linux. Never in a file
+true-code wrote, so a config you commit can never leak a credential.
+
+**Or from the command line:**
+
+```bash
+truecode auth login anthropic     # or: openai, openrouter
+truecode auth status              # which providers have a key
+truecode auth logout openai       # remove one
+```
+
+The key is read without echo, so it does not land in your shell history.
+
+### Which provider?
+
+| Provider | Key from | Why |
+|---|---|---|
+| **Anthropic** | [console.anthropic.com](https://console.anthropic.com/settings/keys) | The default model, `anthropic/claude-sonnet-4-5` |
+| **OpenAI** | [platform.openai.com](https://platform.openai.com/api-keys) | `openai/gpt-4.1`, `openai/gpt-4.1-mini` |
+| **OpenRouter** | [openrouter.ai/keys](https://openrouter.ai/keys) | **One key, every vendor.** Easiest if you want to try several |
+
+OpenRouter is worth knowing about if you do not want an account per vendor. Any
+model it proxies works, whether or not this build has heard of it:
+
+```bash
+truecode --model openrouter/anthropic/claude-sonnet-4.5
+truecode --model openrouter/openai/gpt-4.1-mini
+truecode --model openrouter/google/gemini-2.5-pro      # also fine
+```
+
+For a model true-code has no price for, the cost display reports **no cost rather
+than a guessed one**. An invented price looks exactly like a real one, which is
+the problem with inventing it.
+
+### Environment variables still work
+
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` are read first and
+**always win** over the keyring, so CI stays predictable and a temporary override
+needs no cleanup.
 
 ```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."          # this terminal only
 [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-...", "User")
 ```
 
-Open a new terminal afterwards for it to take effect.
-
-**macOS / Linux**
-
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."     # add to ~/.zshrc or ~/.bashrc to keep it
+export ANTHROPIC_API_KEY="sk-ant-..."          # add to ~/.zshrc to keep it
 ```
 
-For OpenAI models the variable is `OPENAI_API_KEY`. `truecode models` lists which
-models exist and what each is assumed to cost.
+On a headless Linux box with no Secret Service, the keyring is unavailable and the
+environment variable is the way — true-code says so rather than failing obscurely.
 
 ## 4. Check the setup
 
@@ -120,8 +154,9 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode doctor` | Check the setup |
 | `truecode undo` | Revert the last change true-code made |
 | `truecode verify` | Run this project's build, tests and lint |
-| `truecode constraints` | Show the project rules in force |
+| `truecode auth status` | Which providers have a key |
 | `truecode models` | Known models, context windows, assumed prices |
+| `truecode constraints` | Show the project rules in force |
 | `truecode config` | Resolved configuration and where each part came from |
 
 Inside a session: `Enter` sends · `Esc` aborts the running turn · `/undo` reverts
@@ -153,9 +188,15 @@ makes `truecode undo` unable to revert anything; the rules file is worth keeping
 terminal predates the install. Open a new one; if it persists, add the directory
 to `PATH` by hand.
 
-**`no API key found`** — set the variable in the shell you are actually running
-`truecode` from. On Windows a variable set with `$env:` only lasts for that
-terminal window.
+**`no API key for …`** — run `truecode auth login <provider>`, or set the
+environment variable in the shell you are actually running `truecode` from. On
+Windows a variable set with `$env:` only lasts for that terminal window.
+
+**A new key seems to have no effect** — an environment variable beats the keyring.
+`truecode auth status` shows which one is being used.
+
+**`the system keyring is unavailable`** — usual on a headless Linux box with no
+Secret Service running. Use the environment variable instead.
 
 **`error: package requires rustc 1.88`** — `rustup update`.
 
