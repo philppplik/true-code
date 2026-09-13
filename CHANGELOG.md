@@ -10,6 +10,27 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **Editing, behind a confirmation.** `write_file` and `patch` in write mode,
+  `shell` in full mode. Every change is previewed as a diff and applied only if
+  you agree; every command is shown before it runs. See
+  [ADR 0006](docs/adr/0006-confirm-before-changing.md).
+- **Three permission modes** (`--permission-mode read-only|write|full`), defaulting
+  to read-only. A tool the mode does not allow is not offered to the model at all,
+  rather than offered and then refused.
+- `patch` refuses an ambiguous match and says how to make it unique, so a
+  mis-targeted edit fails instead of changing the wrong line.
+- Writes go through a temporary file and a rename, so a crash cannot leave a
+  truncated source file.
+- The shell tool refuses a short list of catastrophic commands outright, even
+  with approval, and flags high-risk ones prominently at the prompt.
+- The system prompt now states what the agent can actually do in the current mode,
+  including admitting in write mode that it cannot run the tests.
+- Approval decisions are recorded in the session log, so the audit trail answers
+  "who allowed this?" and not only "what ran?".
+- `--yes` for headless runs, and a distinct exit code when a change was declined.
+
+### Earlier in this cycle
+
 - **The agent loop.** true-code now reads your actual code before answering,
   instead of guessing from the prompt. Every tool call is visible in the
   transcript as it runs.
