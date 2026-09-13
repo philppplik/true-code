@@ -25,9 +25,11 @@
 //! quietly, because a silent stop is indistinguishable from success.
 
 pub mod approval;
+pub mod checkpoint;
 pub mod session;
 
 pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
+pub use checkpoint::UndoError;
 pub use tc_tools::{Effect, PermissionMode, Risk};
 
 use std::collections::HashMap;
@@ -199,6 +201,13 @@ pub enum AgentEvent {
         /// Why it ended.
         reason: FinishReason,
     },
+    /// Something worth telling the user, outside a run.
+    ///
+    /// Undo reports through here, so the UI needs no special case for it.
+    Notice {
+        /// The message.
+        text: String,
+    },
     /// The run failed. Errors are reported, never swallowed.
     Failed {
         /// What went wrong.
@@ -219,6 +228,8 @@ pub struct Agent {
     approver: std::sync::Arc<dyn Approver>,
     /// Tools the user has approved for the rest of the session.
     approved_tools: std::collections::HashSet<String>,
+    /// Saves file contents before a tool overwrites them.
+    checkpoints: checkpoint::Checkpoints,
     /// Conversation so far, carried across prompts within a session.
     history: Vec<Message>,
     /// Running session total.
@@ -260,6 +271,9 @@ impl Agent {
             budget: config.budget,
             approver,
             approved_tools: std::collections::HashSet::new(),
+            checkpoints: checkpoint::Checkpoints::new(
+                log.directory().unwrap_or_else(|| std::path::PathBuf::from(".")),
+            ),
             history: Vec::new(),
             spent: Cost::default(),
             log,
@@ -408,33 +422,33 @@ impl Agent {
     /// Decides whether one call may run, asking the user when it would change
     /// something.
     ///
-    /// Returns `None` when the call is cleared to run, or the refusal to report.
+    /// Returns the effect to proceed with, or the refusal to report.
     async fn authorise(
         &mut self,
         call: &tc_core::ToolCall,
         events: &mpsc::Sender<AgentEvent>,
-    ) -> Option<Authorisation> {
+    ) -> Gate {
         let effect = match self.tools.preview(&call.name, call.input.clone(), &self.tool_ctx).await
         {
             Ok(effect) => effect,
             // A preview that fails is the call failing: `patch` cannot compute a
             // diff for a snippet that is not there. Report it like any tool error
             // so the model can correct itself, and never reach the real call.
-            Err(err) => return Some(Authorisation::Failed(err.to_string())),
+            Err(err) => return Gate::Failed(err.to_string()),
         };
 
         if !effect.needs_approval() {
-            return None;
+            return Gate::Run(effect);
         }
         // A write that changes nothing is not worth a prompt. Prompts people
         // learn to dismiss are prompts that have stopped protecting them.
         if let Effect::Write(diff) = &effect
             && diff.is_empty()
         {
-            return None;
+            return Gate::Run(effect);
         }
         if self.approved_tools.contains(&call.name) {
-            return None;
+            return Gate::Run(effect);
         }
 
         let request = ApprovalRequest { tool: call.name.clone(), effect };
@@ -449,20 +463,73 @@ impl Agent {
         });
 
         match decision {
-            Decision::Approve => None,
+            Decision::Approve => Gate::Run(request.effect),
             Decision::ApproveToolForSession => {
                 self.approved_tools.insert(call.name.clone());
-                None
+                Gate::Run(request.effect)
             }
             Decision::Deny | Decision::Abort => {
                 send(events, AgentEvent::ToolDeclined { tool: call.name.clone(), summary }).await;
-                Some(if decision == Decision::Abort {
-                    Authorisation::Aborted
-                } else {
-                    Authorisation::Declined
-                })
+                if decision == Decision::Abort { Gate::Aborted } else { Gate::Declined }
             }
         }
+    }
+
+    /// Saves a file's current contents before a tool overwrites them.
+    ///
+    /// A failure here is reported but does not block the change: refusing to edit
+    /// because the *backup* could not be written would be a strange way to protect
+    /// someone. The user is told they are working without a net.
+    async fn checkpoint(
+        &mut self,
+        call: &tc_core::ToolCall,
+        effect: &Effect,
+        events: &mpsc::Sender<AgentEvent>,
+    ) {
+        let Effect::Write(diff) = effect else {
+            return;
+        };
+        let Ok(absolute) = self.tool_ctx.resolve(&diff.path) else {
+            return;
+        };
+
+        match self.checkpoints.capture(&absolute, &diff.path) {
+            Ok(backup) => self.log.append(EventKind::Checkpointed {
+                path: diff.path.clone(),
+                backup,
+                tool: call.name.clone(),
+            }),
+            Err(err) => {
+                send(
+                    events,
+                    AgentEvent::Notice {
+                        text: format!("Could not save an undo copy of {}: {err}", diff.path),
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Undoes the most recent change true-code made in this session.
+    pub fn undo_last(&mut self) -> Result<String, UndoError> {
+        let (events_path, session_dir) = match (self.log.path(), self.log.directory()) {
+            (Some(path), Some(dir)) => (path.to_path_buf(), dir),
+            _ => return Err(UndoError::NothingToUndo),
+        };
+
+        let Some(entry) = checkpoint::last_undoable(&events_path)? else {
+            return Err(UndoError::NothingToUndo);
+        };
+
+        checkpoint::restore(&session_dir, self.tool_ctx.root(), &entry)?;
+        self.log
+            .append(EventKind::Reverted { path: entry.path.clone(), checkpoint_seq: entry.seq });
+
+        Ok(match entry.backup {
+            Some(_) => format!("Reverted {}.", entry.path),
+            None => format!("Removed {}, which true-code had created.", entry.path),
+        })
     }
 
     /// Runs every tool call of a turn and collects the results.
@@ -482,9 +549,9 @@ impl Agent {
 
             // Nothing touches the disk before this returns.
             match self.authorise(call, events).await {
-                None => {}
-                Some(Authorisation::Aborted) => return ToolsOutcome::Aborted,
-                Some(refusal) => {
+                Gate::Run(effect) => self.checkpoint(call, &effect, events).await,
+                Gate::Aborted => return ToolsOutcome::Aborted,
+                refusal => {
                     // Every call still gets a result. A tool call left unanswered
                     // makes the next request invalid for every provider.
                     results.push(ToolResult {
@@ -534,9 +601,11 @@ impl Agent {
     }
 }
 
-/// Why a call was not run.
+/// Whether a call may proceed, and with what effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Authorisation {
+enum Gate {
+    /// Cleared to run. Carries the previewed effect, which the checkpoint needs.
+    Run(Effect),
     /// The user said no; the run continues.
     Declined,
     /// The user said no and ended the run.
@@ -545,14 +614,15 @@ enum Authorisation {
     Failed(String),
 }
 
-impl Authorisation {
+impl Gate {
     /// What the model is told.
     ///
     /// A declined change must read as a decision, not a malfunction — otherwise
     /// the model retries the same edit, and the user gets asked again.
     fn message(&self) -> String {
         match self {
-            Self::Declined | Self::Aborted => {
+            // `Run` never reaches here; it is not a refusal.
+            Self::Run(_) | Self::Declined | Self::Aborted => {
                 "The user declined this change. Do not retry it. Ask what they would prefer \
                  instead, or continue with the rest of the task."
                     .to_owned()

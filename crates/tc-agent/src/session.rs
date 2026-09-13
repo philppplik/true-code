@@ -51,6 +51,47 @@ impl SessionLog {
         Self { id, file, path, seq: 0 }
     }
 
+    /// Opens an existing session's log for appending.
+    ///
+    /// Used by `true-code undo`, which records a revert against a session that
+    /// ended in another process.
+    ///
+    /// Sequence numbers continue from the highest already present. Restarting at
+    /// zero would produce duplicates, and ADR 0004 promises `seq` addresses an
+    /// event uniquely — `Reverted.checkpoint_seq` depends on exactly that.
+    #[must_use]
+    pub fn reopen(session_dir: &Path) -> Self {
+        let path = session_dir.join(EVENTS_FILE);
+
+        // The directory is named after the session. If it is not a well-formed
+        // id, a fresh one still produces a readable log — the id labels events,
+        // it does not address them.
+        let id = session_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.parse().ok())
+            .map_or_else(SessionId::new, SessionId);
+
+        let seq = std::fs::read_to_string(&path).map_or(0, |raw| {
+            raw.lines()
+                .filter_map(|line| Event::from_jsonl(line).ok())
+                .map(|event| event.seq + 1)
+                .max()
+                .unwrap_or(0)
+        });
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|err| {
+                tracing::warn!(path = %path.display(), error = %err, "session log disabled");
+            })
+            .ok();
+
+        Self { id, file, path, seq }
+    }
+
     /// Creates a log that writes nowhere, for tests and ephemeral runs.
     #[must_use]
     pub fn disabled(id: SessionId) -> Self {
@@ -67,6 +108,12 @@ impl SessionLog {
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.file.as_ref().map(|_| self.path.as_path())
+    }
+
+    /// The session's directory, which also holds its checkpoint backups.
+    #[must_use]
+    pub fn directory(&self) -> Option<PathBuf> {
+        self.path().and_then(Path::parent).map(Path::to_path_buf)
     }
 
     /// Appends one event, stamping it with the next sequence number.

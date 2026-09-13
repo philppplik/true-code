@@ -89,6 +89,30 @@ pub enum EventKind {
         /// Whether it was allowed.
         approved: bool,
     },
+    /// A file's contents were saved before a tool changed it.
+    ///
+    /// Written *before* the change is applied. If the process dies mid-write, the
+    /// checkpoint already exists — which is the whole point of recording it first.
+    Checkpointed {
+        /// Path relative to the workspace root.
+        path: String,
+        /// File name inside the session's `backups/` directory.
+        ///
+        /// `None` means the file did not exist, so undoing means deleting it again.
+        backup: Option<String>,
+        /// Tool that was about to change it.
+        tool: String,
+    },
+    /// A checkpoint was rolled back.
+    Reverted {
+        /// Path relative to the workspace root.
+        path: String,
+        /// Sequence number of the [`EventKind::Checkpointed`] this undoes.
+        ///
+        /// Referencing the event rather than the path is what makes "undo again"
+        /// walk backwards correctly through repeated edits to the same file.
+        checkpoint_seq: u64,
+    },
     /// A tool finished.
     ToolCompleted {
         /// Identifier of the matching [`EventKind::ToolCalled`].
