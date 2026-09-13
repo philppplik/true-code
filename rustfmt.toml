@@ -1,0 +1,5 @@
+# Slightly wider than the default 100: the domain has descriptive names, and
+# wrapping them produces less readable code, not more.
+max_width = 100
+use_small_heuristics = "Max"
+newline_style = "Unix"

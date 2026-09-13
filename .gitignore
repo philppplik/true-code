@@ -1,0 +1,24 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Secrets — never commit API keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# true-code local state
+.truecode/sessions/
+.truecode/cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Agent harness scratch space
+.remember/
