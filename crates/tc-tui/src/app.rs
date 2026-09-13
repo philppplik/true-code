@@ -3,16 +3,41 @@
 //! Deliberately free of `ratatui` and `crossterm` types so that the state machine
 //! can be unit-tested without a terminal. Rendering reads this; it never owns it.
 
+use tc_agent::{AgentEvent, FinishReason};
 use tc_config::Budget;
-use tc_core::{Cost, Delta, Price, Role, StopReason, Usage};
+use tc_core::{Cost, Price, Usage};
+
+/// How a tool call is going.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolState {
+    /// Still running.
+    Running,
+    /// Finished successfully.
+    Done,
+    /// Failed. The model sees the error and usually recovers, so this is
+    /// informational rather than fatal.
+    Failed,
+}
 
 /// One entry in the visible transcript.
+///
+/// Tool activity is a first-class entry rather than a hidden detail: showing what
+/// the agent read, and when, is the transparency the whole project is premised on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// Who said it.
-    pub role: Role,
-    /// What was said. Grows incrementally while the assistant streams.
-    pub text: String,
+pub enum Entry {
+    /// Something the user typed.
+    User(String),
+    /// Text from the model.
+    Assistant(String),
+    /// A tool the agent ran.
+    Tool {
+        /// Tool name.
+        tool: String,
+        /// One-line rendering of the arguments.
+        summary: String,
+        /// How it is going.
+        state: ToolState,
+    },
 }
 
 /// What the app is currently doing.
@@ -21,7 +46,7 @@ pub enum Status {
     /// Waiting for input.
     Idle,
     /// A turn is in flight; `Esc` aborts it.
-    Streaming,
+    Working,
     /// The budget is exhausted; no further turns are started.
     BudgetExhausted,
 }
@@ -78,64 +103,94 @@ impl App {
         }
     }
 
-    /// Applies one streaming increment.
-    pub fn apply(&mut self, delta: Delta) {
-        match delta {
-            Delta::Started { model } => {
+    /// Applies one event from the agent.
+    pub fn apply(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::Started { model } => {
                 self.model = model;
-                self.status = Status::Streaming;
-                self.entries.push(Entry { role: Role::Assistant, text: String::new() });
+                self.status = Status::Working;
             }
-            Delta::Text { text } => self.append_assistant_text(&text),
-            Delta::Completed { stop_reason, usage } => self.finish_turn(stop_reason, usage),
+
+            AgentEvent::Text { text } => self.append_assistant_text(&text),
+
+            AgentEvent::ToolStarted { tool, summary } => {
+                self.entries.push(Entry::Tool { tool, summary, state: ToolState::Running });
+            }
+
+            AgentEvent::ToolFinished { tool, is_error } => {
+                self.finish_tool(&tool, is_error);
+            }
+
+            AgentEvent::TurnCompleted { usage, cost } => {
+                self.usage = self.usage.saturating_add(usage);
+                self.cost = self.cost.add(cost);
+            }
+
+            AgentEvent::Finished { reason } => self.finish(&reason),
+
+            AgentEvent::Failed { message } => {
+                self.status = Status::Idle;
+                self.notice = Some(message);
+            }
         }
     }
 
-    /// Appends streamed text to the current assistant entry.
-    ///
-    /// Creates the entry if the provider sent text before announcing the model —
-    /// dropping tokens because of an unexpected event order would be worse.
+    /// Appends streamed text to the current assistant entry, or starts one.
     fn append_assistant_text(&mut self, text: &str) {
         match self.entries.last_mut() {
-            Some(entry) if entry.role == Role::Assistant => entry.text.push_str(text),
-            _ => self.entries.push(Entry { role: Role::Assistant, text: text.to_owned() }),
+            Some(Entry::Assistant(existing)) => existing.push_str(text),
+            _ => self.entries.push(Entry::Assistant(text.to_owned())),
         }
     }
 
-    /// Closes out a turn and updates the cost accounting.
-    fn finish_turn(&mut self, stop_reason: StopReason, usage: Usage) {
-        self.usage = self.usage.saturating_add(usage);
-        self.cost = self.cost.add(self.price.cost_of(usage));
+    /// Marks the most recent running instance of `tool` as finished.
+    ///
+    /// Searches from the back because parallel tool calls can be in flight at
+    /// once, and the newest matching one is the one that just reported.
+    fn finish_tool(&mut self, tool: &str, is_error: bool) {
+        let state = if is_error { ToolState::Failed } else { ToolState::Done };
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool { tool: name, state: existing, .. } = entry
+                && name == tool
+                && *existing == ToolState::Running
+            {
+                *existing = state;
+                return;
+            }
+        }
+    }
 
-        self.status = if self.budget.is_exhausted(self.cost.usd) {
-            self.notice = Some(format!(
-                "Budget of ${:.2} reached — session stopped. Raise `budget.session_limit_usd` to continue.",
-                self.budget.session_limit_usd
-            ));
+    /// Closes out a run.
+    fn finish(&mut self, reason: &FinishReason) {
+        self.status = if *reason == FinishReason::BudgetExhausted
+            || self.budget.is_exhausted(self.cost.usd)
+        {
             Status::BudgetExhausted
         } else {
             Status::Idle
         };
 
-        if stop_reason == StopReason::MaxTokens {
-            self.notice = Some(
-                "Answer was cut off at the output limit — ask for a shorter scope.".to_owned(),
-            );
-        }
+        // "Done." is the expected outcome and does not need announcing; every
+        // other reason tells the user something they need to act on.
+        self.notice = match reason {
+            FinishReason::Completed => None,
+            other => Some(other.message()),
+        };
     }
 
-    /// Records that the user aborted the turn.
+    /// Records that the user aborted the run.
     pub fn abort(&mut self) {
-        if self.status == Status::Streaming {
+        if self.status == Status::Working {
             self.status = Status::Idle;
             self.notice = Some("Aborted.".to_owned());
+            for entry in &mut self.entries {
+                if let Entry::Tool { state, .. } = entry
+                    && *state == ToolState::Running
+                {
+                    *state = ToolState::Failed;
+                }
+            }
         }
-    }
-
-    /// Reports an error into the transcript instead of crashing the session.
-    pub fn report_error(&mut self, message: impl Into<String>) {
-        self.status = Status::Idle;
-        self.notice = Some(message.into());
     }
 
     /// Takes the current input as a user turn, if it is non-empty and allowed.
@@ -153,7 +208,7 @@ impl App {
         self.cursor = 0;
         self.notice = None;
         self.scroll = 0;
-        self.entries.push(Entry { role: Role::User, text: prompt.clone() });
+        self.entries.push(Entry::User(prompt.clone()));
         Some(prompt)
     }
 
@@ -231,57 +286,129 @@ mod tests {
         )
     }
 
-    #[test]
-    fn streaming_text_accumulates_into_one_entry() {
-        let mut app = test_app();
-        app.apply(Delta::Started { model: "test/model".to_owned() });
-        app.apply(Delta::Text { text: "Hal".to_owned() });
-        app.apply(Delta::Text { text: "lo".to_owned() });
-
-        assert_eq!(app.entries.len(), 1);
-        assert_eq!(app.entries[0].text, "Hallo");
-        assert_eq!(app.status, Status::Streaming);
+    fn tool_started(tool: &str) -> AgentEvent {
+        AgentEvent::ToolStarted { tool: tool.to_owned(), summary: "path=a.rs".to_owned() }
     }
 
     #[test]
-    fn text_before_the_start_event_is_not_dropped() {
+    fn streaming_text_accumulates_into_one_entry() {
         let mut app = test_app();
-        app.apply(Delta::Text { text: "orphan".to_owned() });
-        assert_eq!(app.entries[0].text, "orphan");
+        app.apply(AgentEvent::Started { model: "test/model".to_owned() });
+        app.apply(AgentEvent::Text { text: "Hal".to_owned() });
+        app.apply(AgentEvent::Text { text: "lo".to_owned() });
+
+        assert_eq!(app.entries, vec![Entry::Assistant("Hallo".to_owned())]);
+        assert_eq!(app.status, Status::Working);
+    }
+
+    #[test]
+    fn a_tool_call_appears_in_the_transcript_while_it_runs() {
+        let mut app = test_app();
+        app.apply(tool_started("read_file"));
+
+        assert_eq!(
+            app.entries[0],
+            Entry::Tool {
+                tool: "read_file".to_owned(),
+                summary: "path=a.rs".to_owned(),
+                state: ToolState::Running,
+            }
+        );
+    }
+
+    #[test]
+    fn finishing_a_tool_marks_that_entry_done() {
+        let mut app = test_app();
+        app.apply(tool_started("read_file"));
+        app.apply(AgentEvent::ToolFinished { tool: "read_file".to_owned(), is_error: false });
+
+        assert!(matches!(app.entries[0], Entry::Tool { state: ToolState::Done, .. }));
+    }
+
+    #[test]
+    fn a_failed_tool_is_marked_but_does_not_end_the_run() {
+        let mut app = test_app();
+        app.apply(AgentEvent::Started { model: "test/model".to_owned() });
+        app.apply(tool_started("read_file"));
+        app.apply(AgentEvent::ToolFinished { tool: "read_file".to_owned(), is_error: true });
+
+        assert!(matches!(app.entries[0], Entry::Tool { state: ToolState::Failed, .. }));
+        assert_eq!(
+            app.status,
+            Status::Working,
+            "a tool error is context for the model, not the end of the run"
+        );
+    }
+
+    #[test]
+    fn parallel_calls_of_the_same_tool_finish_independently() {
+        let mut app = test_app();
+        app.apply(tool_started("grep"));
+        app.apply(tool_started("grep"));
+        app.apply(AgentEvent::ToolFinished { tool: "grep".to_owned(), is_error: false });
+
+        // The most recent running call is the one that reported.
+        assert!(matches!(app.entries[0], Entry::Tool { state: ToolState::Running, .. }));
+        assert!(matches!(app.entries[1], Entry::Tool { state: ToolState::Done, .. }));
+    }
+
+    #[test]
+    fn text_after_a_tool_starts_a_new_entry_instead_of_appending_to_the_tool() {
+        let mut app = test_app();
+        app.apply(AgentEvent::Text { text: "reading".to_owned() });
+        app.apply(tool_started("read_file"));
+        app.apply(AgentEvent::Text { text: "found it".to_owned() });
+
+        assert_eq!(app.entries.len(), 3);
+        assert_eq!(app.entries[2], Entry::Assistant("found it".to_owned()));
     }
 
     #[test]
     fn completing_a_turn_accumulates_usage_and_cost() {
         let mut app = test_app();
-        app.apply(Delta::Started { model: "test/model".to_owned() });
-        app.apply(Delta::Completed {
-            stop_reason: StopReason::EndTurn,
+        app.apply(AgentEvent::TurnCompleted {
             usage: Usage { input_tokens: 1_000, output_tokens: 1_000, ..Usage::default() },
+            cost: Cost { usd: 0.018 },
         });
 
-        assert_eq!(app.status, Status::Idle);
         assert_eq!(app.usage.output_tokens, 1_000);
-        assert!(app.cost.usd > 0.0);
+        assert!((app.cost.usd - 0.018).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_successful_finish_shows_no_notice() {
+        let mut app = test_app();
+        app.apply(AgentEvent::Finished { reason: FinishReason::Completed });
+
+        assert_eq!(app.status, Status::Idle);
+        assert!(app.notice.is_none(), "'Done.' is noise the user does not need");
+    }
+
+    #[test]
+    fn a_guard_rail_finish_explains_itself() {
+        let mut app = test_app();
+        app.apply(AgentEvent::Finished { reason: FinishReason::TurnLimit });
+
+        assert!(app.notice.expect("a notice is set").contains("narrowing"));
     }
 
     #[test]
     fn exceeding_the_budget_stops_the_session_instead_of_spending_on() {
         let mut app = test_app();
-        app.apply(Delta::Completed {
-            stop_reason: StopReason::EndTurn,
-            usage: Usage { output_tokens: 1_000_000, ..Usage::default() },
-        });
+        app.apply(AgentEvent::Finished { reason: FinishReason::BudgetExhausted });
 
         assert_eq!(app.status, Status::BudgetExhausted);
-        assert!(app.notice.is_some());
+        app.input = "another prompt".to_owned();
         assert!(app.submit().is_none(), "no further turn may be started");
     }
 
     #[test]
-    fn truncated_answers_are_flagged_to_the_user() {
+    fn a_failure_is_reported_rather_than_swallowed() {
         let mut app = test_app();
-        app.apply(Delta::Completed { stop_reason: StopReason::MaxTokens, usage: Usage::default() });
-        assert!(app.notice.expect("a notice is set").contains("cut off"));
+        app.apply(AgentEvent::Failed { message: "network unreachable".to_owned() });
+
+        assert_eq!(app.status, Status::Idle);
+        assert_eq!(app.notice.as_deref(), Some("network unreachable"));
     }
 
     #[test]
@@ -300,15 +427,33 @@ mod tests {
         }
         assert_eq!(app.submit().as_deref(), Some("hi"));
         assert!(app.input.is_empty());
-        assert_eq!(app.entries[0].role, Role::User);
+        assert_eq!(app.entries[0], Entry::User("hi".to_owned()));
     }
 
     #[test]
     fn submit_is_refused_while_a_turn_is_in_flight() {
         let mut app = test_app();
-        app.status = Status::Streaming;
+        app.status = Status::Working;
         app.input = "second prompt".to_owned();
         assert!(app.submit().is_none());
+    }
+
+    #[test]
+    fn aborting_marks_running_tools_as_failed() {
+        let mut app = test_app();
+        app.status = Status::Working;
+        app.apply(tool_started("grep"));
+        app.abort();
+
+        assert_eq!(app.status, Status::Idle);
+        assert!(matches!(app.entries[0], Entry::Tool { state: ToolState::Failed, .. }));
+    }
+
+    #[test]
+    fn aborting_when_nothing_runs_is_a_no_op() {
+        let mut app = test_app();
+        app.abort();
+        assert!(app.notice.is_none());
     }
 
     #[test]
@@ -331,17 +476,6 @@ mod tests {
         app.backspace();
         assert!(app.input.is_empty());
         assert_eq!(app.cursor, 0);
-    }
-
-    #[test]
-    fn aborting_only_affects_a_running_turn() {
-        let mut app = test_app();
-        app.abort();
-        assert!(app.notice.is_none(), "nothing was running");
-
-        app.status = Status::Streaming;
-        app.abort();
-        assert_eq!(app.status, Status::Idle);
     }
 
     #[test]

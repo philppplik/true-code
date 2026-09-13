@@ -15,14 +15,12 @@
 //! the only carrier of meaning (roles also have text gutters), and every state is
 //! legible on a monochrome terminal.
 
+use crate::app::{App, Entry, Status, ToolState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
-use tc_core::Role;
-
-use crate::app::{App, Status};
 
 /// Accent colour of the brand.
 const ACCENT: Color = Color::Cyan;
@@ -140,7 +138,7 @@ fn cost_colour(app: &App) -> Color {
 const fn status_label(status: Status) -> &'static str {
     match status {
         Status::Idle => "ready",
-        Status::Streaming => "thinking… (Esc aborts)",
+        Status::Working => "working… (Esc aborts)",
         Status::BudgetExhausted => "budget reached",
     }
 }
@@ -149,26 +147,59 @@ const fn status_label(status: Status) -> &'static str {
 const fn status_colour(status: Status) -> Color {
     match status {
         Status::Idle => Color::Green,
-        Status::Streaming => ACCENT,
+        Status::Working => ACCENT,
         Status::BudgetExhausted => Color::Red,
     }
 }
 
 /// Turns one transcript entry into renderable lines.
-fn entry_lines(entry: &crate::app::Entry) -> Vec<Line<'static>> {
-    let (gutter, colour) = match entry.role {
-        Role::User => ("you ", Color::White),
-        Role::Assistant => ("tc  ", ACCENT),
-        Role::System => ("sys ", MUTED),
-    };
+fn entry_lines(entry: &Entry) -> Vec<Line<'static>> {
+    match entry {
+        Entry::User(text) => speech("you ", Color::White, text.clone()),
+        Entry::Assistant(text) => speech("tc  ", ACCENT, text.clone()),
+        Entry::Tool { tool, summary, state } => vec![
+            Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(tool_marker(*state), Style::default().fg(tool_colour(*state))),
+                Span::styled(format!(" {tool}"), Style::default().fg(tool_colour(*state))),
+                Span::styled(format!(" {summary}"), Style::default().fg(MUTED)),
+            ]),
+            Line::raw(""),
+        ],
+    }
+}
 
-    let mut lines = vec![Line::from(vec![
-        Span::styled(gutter, Style::default().fg(colour).add_modifier(Modifier::BOLD)),
-        Span::styled("› ", Style::default().fg(MUTED)),
-        Span::raw(entry.text.clone()),
-    ])];
-    lines.push(Line::raw(""));
-    lines
+/// Renders a spoken line with its gutter.
+fn speech(gutter: &'static str, colour: Color, text: String) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled(gutter, Style::default().fg(colour).add_modifier(Modifier::BOLD)),
+            Span::styled("› ", Style::default().fg(MUTED)),
+            Span::raw(text),
+        ]),
+        Line::raw(""),
+    ]
+}
+
+/// Symbol for a tool's state.
+///
+/// A shape, not just a colour: the state has to survive a monochrome terminal and
+/// a colour-blind reader.
+const fn tool_marker(state: ToolState) -> &'static str {
+    match state {
+        ToolState::Running => "◌",
+        ToolState::Done => "●",
+        ToolState::Failed => "✗",
+    }
+}
+
+/// Colour for a tool's state.
+const fn tool_colour(state: ToolState) -> Color {
+    match state {
+        ToolState::Running => WARN,
+        ToolState::Done => Color::Green,
+        ToolState::Failed => Color::Red,
+    }
 }
 
 /// First-run guidance, shown while the transcript is empty.
@@ -251,7 +282,7 @@ mod tests {
 
     #[test]
     fn every_status_has_a_label_that_names_its_exit() {
-        assert!(status_label(Status::Streaming).contains("Esc"));
+        assert!(status_label(Status::Working).contains("Esc"));
         assert_eq!(status_label(Status::Idle), "ready");
     }
 }

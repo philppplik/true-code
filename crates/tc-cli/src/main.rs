@@ -11,11 +11,15 @@
 
 mod headless;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
+use tc_agent::{Agent, SessionLog};
 use tc_config::Config;
+use tc_core::SessionId;
+use tc_tools::{ToolContext, ToolSet};
 
 /// Command-line interface.
 #[derive(Debug, Parser)]
@@ -66,27 +70,38 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Models) => {
-            print_models();
-            Ok(())
+        Some(Command::Models) => print_models(),
+        Some(Command::Config) => print_config(&config),
+        None => {
+            // A guard rail that stopped the run is not a crash, but it is also not
+            // a success — scripts need to be able to tell the difference.
+            let code = start_session(&config, &cwd, cli.prompt)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
-        Some(Command::Config) => {
-            print_config(&config);
-            Ok(())
-        }
-        None => start_session(&config, cli.prompt),
     }
+    Ok(())
 }
 
-/// Starts either the headless turn or the interactive TUI.
-fn start_session(config: &Config, prompt: Option<String>) -> anyhow::Result<()> {
+/// Starts either the headless run or the interactive TUI.
+fn start_session(config: &Config, cwd: &Path, prompt: Option<String>) -> anyhow::Result<i32> {
     let info = config.model_info()?;
     let api_key = config.api_key()?;
-    let provider = tc_providers::provider_for(info, api_key);
+    let provider: Arc<dyn tc_providers::Provider> =
+        Arc::from(tc_providers::provider_for(info, api_key));
+
+    let agent = Agent::new(
+        provider,
+        ToolSet::read_only(),
+        ToolContext::new(cwd),
+        config,
+        SessionLog::create(cwd, SessionId::new()),
+    );
 
     match prompt {
-        Some(prompt) => headless::run(provider, config, &prompt),
-        None => tc_tui::run(provider, config),
+        Some(prompt) => headless::run(agent, &prompt),
+        None => tc_tui::run(agent, config).map(|()| 0),
     }
 }
 

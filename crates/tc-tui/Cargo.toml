@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 tc-core = { workspace = true }
+tc-agent = { workspace = true }
 tc-config = { workspace = true }
 tc-providers = { workspace = true }
 anyhow = { workspace = true }
