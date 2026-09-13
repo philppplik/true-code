@@ -1,0 +1,48 @@
+# Project rules for true-code itself.
+#
+# These are checked mechanically before any change is applied, and restated to
+# the model on every request. See `docs/adr/0008-constraint-ledger.md`.
+#
+# Keep this list short. Every rule is paid for in context on every request, and a
+# ledger nobody reads is a ledger nobody follows.
+
+[[constraint]]
+description = "No unsafe code anywhere in the workspace"
+forbid_added = '\bunsafe\s*\{|^\s*unsafe\s+(fn|impl|trait)'
+in_files = ["**/*.rs"]
+
+[[constraint]]
+description = "No unwrap() or expect() outside tests — errors are context for the user"
+forbid_added = '\.(unwrap|expect)\('
+in_files = ["**/src/**/*.rs"]
+# Unit tests live inside src/ behind #[cfg(test)], so this rule is a prompt to
+# think rather than a hard wall. Approve it when the call really is in a test.
+except_files = ["**/tests/**"]
+
+[[constraint]]
+description = "Engine crates must not depend on the UI (ADR 0002)"
+forbid_added = '^\s*(ratatui|crossterm)\s*='
+in_files = [
+    "crates/tc-core/Cargo.toml",
+    "crates/tc-config/Cargo.toml",
+    "crates/tc-providers/Cargo.toml",
+    "crates/tc-tools/Cargo.toml",
+    "crates/tc-agent/Cargo.toml",
+]
+
+[[constraint]]
+description = "Do not change the CI pipeline as a side effect of another task"
+forbid_files = [".github/workflows/**"]
+
+[[constraint]]
+description = "Never publish or force-push from an agent session"
+forbid_command = 'cargo publish|npm publish|git push\s+.*--force|git push\s+.*-f\b'
+
+[[reminder]]
+text = "Comments explain why, not what. The code already says what it does."
+
+[[reminder]]
+text = "Record a structural decision as an ADR in docs/adr/ before implementing it."
+
+[[reminder]]
+text = "Say what you actually verified. An unverified claim is worse than no claim."
