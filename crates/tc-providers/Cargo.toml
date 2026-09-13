@@ -1,0 +1,27 @@
+[package]
+name = "tc-providers"
+description = "Provider abstraction for true-code: one narrow trait, one normalised stream, many vendors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tc-core = { workspace = true }
+tc-config = { workspace = true }
+async-trait = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true
