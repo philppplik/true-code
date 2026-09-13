@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/philppplik/true-code/actions/workflows/ci.yml/badge.svg)](https://github.com/philppplik/true-code/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 </div>
 
@@ -46,7 +46,7 @@ See [the roadmap](docs/PLAN-v0.1.md#6-roadmap-realistisch-mit-abnahmekriterien).
 
 ## Install
 
-Requires [Rust](https://rustup.rs) 1.85 or newer.
+Requires [Rust](https://rustup.rs) 1.88 or newer.
 
 ```bash
 git clone https://github.com/philppplik/true-code

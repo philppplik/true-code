@@ -22,7 +22,7 @@ updates:
     commit-message:
       prefix: "ci(deps)"
     ignore:
-      # dtolnay/rust-toolchain uses the Rust version as its tag, so "@1.85.0"
-      # is the MSRV we deliberately pin — not a stale action version. Letting
-      # dependabot "upgrade" it would silently delete the MSRV check.
+      # dtolnay/rust-toolchain uses the Rust version as its tag, so the pinned
+      # "@1.88.0" is our MSRV — not a stale action version. Letting dependabot
+      # "upgrade" it would silently delete the MSRV check.
       - dependency-name: dtolnay/rust-toolchain

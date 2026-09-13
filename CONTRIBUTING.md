@@ -13,7 +13,7 @@ how good it is. Asking first saves your evening.
 ## Setup
 
 ```bash
-rustup toolchain install stable      # 1.85 or newer
+rustup toolchain install stable      # 1.88 or newer
 git clone https://github.com/philppplik/true-code
 cd true-code
 cargo test --workspace
