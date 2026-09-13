@@ -137,10 +137,11 @@ impl Config {
         }
         config = merge(config, &cwd.join(PROJECT_DIR).join(CONFIG_FILE))?;
 
-        if let Ok(model) = std::env::var(ENV_MODEL) {
-            if !model.trim().is_empty() {
-                config.model = model;
-            }
+        // An empty variable means "not set" here, not "select the empty model".
+        if let Ok(model) = std::env::var(ENV_MODEL)
+            && !model.trim().is_empty()
+        {
+            config.model = model;
         }
         Ok(config)
     }
