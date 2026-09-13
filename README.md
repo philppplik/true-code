@@ -44,17 +44,21 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 - **Guard rails that stop with a reason** — turn limit, session budget, and loop
   detection for an agent repeating itself. No silent stops.
 - **Live token and cost accounting**, with a budget that actually halts the run.
-- **Append-only session log** in `.truecode/sessions/`, recording what ran *and*
-  what you allowed.
+- **Undo.** `/undo` in the TUI, or `true-code undo` from the shell — which works
+  long after the session ended, because it reads the session log
+  ([ADR 0007](docs/adr/0007-undo-from-the-event-log.md)).
+- **Append-only session log** in `.truecode/sessions/`, recording what ran, what
+  you allowed, and what can still be taken back.
 - **Model-neutral provider layer** (Anthropic and OpenAI wire protocols),
   including tool calls and prompt-cache accounting on both.
 - **Headless mode** (`-p`) for scripts and CI.
 
-Not yet built: undo and checkpoints, OS sandboxing, MCP, the LEARN mode.
+Not yet built: OS sandboxing, MCP, the LEARN mode.
 See [the roadmap](docs/PLAN-v0.1.md#6-roadmap-realistisch-mit-abnahmekriterien).
 
-> Confirmation means you see a change before it lands. It does not yet mean you
-> can take it back afterwards — commit before you let it edit anything.
+> Undo reverts what *true-code* changed, newest first. It is not version control:
+> it knows nothing about edits you made by hand in between, and restoring a
+> checkpoint will overwrite them. Commit your work.
 
 > Treat this as a spike, not a product. It will change shape.
 
@@ -90,7 +94,7 @@ true-code config                           # resolved config, and where it came 
 ```
 
 In the TUI: `Enter` sends · `Esc` aborts the running turn · `Ctrl+C` quits ·
-`PgUp`/`PgDn` scroll.
+`PgUp`/`PgDn` scroll · `/undo` reverts the last change · `/help` lists commands.
 
 When the agent proposes a change, a diff appears and waits:
 `y` apply · `n` skip · `a` always allow this tool · `Esc` stop the run.
@@ -106,6 +110,15 @@ There is deliberately no "apply on Enter".
 
 Headless runs refuse changes, because there is nobody to ask. `--yes` approves
 everything and is meant for CI — it is exactly as dangerous as it sounds.
+
+### Taking a change back
+
+```bash
+true-code undo    # revert the last change true-code made in this project
+```
+
+Run it again to step further back. It reads the newest session log, so it works
+from a fresh shell, tomorrow, after you have closed everything.
 
 ## Configure
 

@@ -10,6 +10,18 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **Undo.** `/undo` in the TUI and `true-code undo` from the shell revert the last
+  change true-code made. Run it again to step further back. Files are copied aside
+  before they are changed, and undo is derived entirely from the session log — so
+  it works from a fresh shell long after the session ended
+  ([ADR 0007](docs/adr/0007-undo-from-the-event-log.md)).
+- Undoing a file the agent *created* deletes it again, rather than leaving an
+  empty shell behind.
+- `/help` in the TUI. An unrecognised slash command is answered locally instead of
+  being sent to the model, which would charge for a confused reply.
+
+### Earlier in this cycle
+
 - **Editing, behind a confirmation.** `write_file` and `patch` in write mode,
   `shell` in full mode. Every change is previewed as a diff and applied only if
   you agree; every command is shown before it runs. See
