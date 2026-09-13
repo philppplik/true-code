@@ -44,7 +44,10 @@ pub use session::SessionLog;
 pub const MAX_TURNS: usize = 25;
 
 /// How many identical tool calls count as a loop.
-const LOOP_THRESHOLD: usize = 3;
+///
+/// Public for the same reason as [`MAX_TURNS`]: it is a limit users hit and need
+/// to be able to reason about, not an implementation detail.
+pub const LOOP_THRESHOLD: usize = 3;
 
 /// The default system prompt.
 ///
