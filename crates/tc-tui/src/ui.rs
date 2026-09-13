@@ -15,7 +15,7 @@
 //! the only carrier of meaning (roles also have text gutters), and every state is
 //! legible on a monochrome terminal.
 
-use tc_agent::{Effect, Risk};
+use tc_agent::{Effect, Proof, Risk};
 
 use crate::app::{App, Entry, Status, ToolState};
 use ratatui::Frame;
@@ -295,6 +295,7 @@ fn entry_lines(entry: &Entry) -> Vec<Line<'static>> {
     match entry {
         Entry::User(text) => speech("you ", Color::White, text.clone()),
         Entry::Assistant(text) => speech("tc  ", ACCENT, text.clone()),
+        Entry::Proof(proof) => proof_lines(proof),
         Entry::Tool { tool, summary, state } => vec![
             Line::from(vec![
                 Span::styled("    ", Style::default()),
@@ -305,6 +306,60 @@ fn entry_lines(entry: &Entry) -> Vec<Line<'static>> {
             Line::raw(""),
         ],
     }
+}
+
+/// Renders the proof panel.
+///
+/// The verdict comes first and is coloured by whether it is alarming. A panel
+/// whose conclusion is buried under six lines of detail is a panel that gets
+/// skimmed, and the conclusion is the entire point.
+fn proof_lines(proof: &Proof) -> Vec<Line<'static>> {
+    let verdict = proof.verdict();
+    let colour = if verdict.is_alarming() { Color::Red } else { Color::Green };
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled("    proof ", Style::default().fg(MUTED)),
+        Span::styled(
+            verdict.label().to_owned(),
+            Style::default().fg(colour).add_modifier(Modifier::BOLD),
+        ),
+    ])];
+
+    if let Some(advice) = verdict.advice() {
+        lines.push(Line::from(Span::styled(
+            format!("          {advice}"),
+            Style::default().fg(colour),
+        )));
+    }
+
+    for path in &proof.changed {
+        lines.push(Line::from(Span::styled(
+            format!("          changed {path}"),
+            Style::default().fg(MUTED),
+        )));
+    }
+
+    for check in &proof.checks {
+        let (mark, colour) =
+            if check.passed() { ("ok  ", Color::Green) } else { ("FAIL", Color::Red) };
+        lines.push(Line::from(vec![
+            Span::styled(format!("          {mark} "), Style::default().fg(colour)),
+            Span::styled(
+                format!("{} (exit {})", check.command, check.exit_code),
+                Style::default().fg(MUTED),
+            ),
+        ]));
+    }
+
+    for violation in &proof.violations {
+        lines.push(Line::from(Span::styled(
+            format!("          rule broken: {}", violation.summary()),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    lines.push(Line::raw(""));
+    lines
 }
 
 /// Renders a spoken line with its gutter.

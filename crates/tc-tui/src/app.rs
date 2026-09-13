@@ -3,7 +3,7 @@
 //! Deliberately free of `ratatui` and `crossterm` types so that the state machine
 //! can be unit-tested without a terminal. Rendering reads this; it never owns it.
 
-use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode};
+use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode, Proof};
 use tc_config::Budget;
 use tc_core::{Cost, Price, Usage};
 
@@ -41,6 +41,8 @@ pub enum Entry {
     User(String),
     /// Text from the model.
     Assistant(String),
+    /// What a run was observed to do.
+    Proof(Proof),
     /// A tool the agent ran.
     Tool {
         /// Tool name.
@@ -178,6 +180,8 @@ impl App {
                 self.usage = self.usage.saturating_add(usage);
                 self.cost = self.cost.add(cost);
             }
+
+            AgentEvent::Proven { proof } => self.entries.push(Entry::Proof(proof)),
 
             AgentEvent::Finished { reason } => self.finish(&reason),
 
@@ -622,6 +626,17 @@ mod tests {
         app.input = "what does /undo do?".to_owned();
 
         assert!(matches!(app.submit(), Some(Submission::Prompt(_))));
+    }
+
+    #[test]
+    fn the_proof_panel_lands_in_the_transcript() {
+        let mut app = test_app();
+        let mut proof = Proof::default();
+        proof.record_change("src/lib.rs");
+
+        app.apply(AgentEvent::Proven { proof: proof.clone() });
+
+        assert_eq!(app.entries, vec![Entry::Proof(proof)]);
     }
 
     #[test]
