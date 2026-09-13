@@ -1,0 +1,28 @@
+[package]
+name = "tc-agent"
+description = "The true-code agent loop: turns, tool execution, guard rails and the session log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tc-core = { workspace = true }
+tc-config = { workspace = true }
+tc-providers = { workspace = true }
+tc-tools = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true
