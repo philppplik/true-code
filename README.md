@@ -5,7 +5,7 @@
 **An agentic coding harness that shows you what it did — and what it cost.**
 
 [![CI](https://github.com/philppplik/true-code/actions/workflows/ci.yml/badge.svg)](https://github.com/philppplik/true-code/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 </div>
@@ -161,6 +161,5 @@ described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
-option — the Rust ecosystem convention, and compatible with the MCP and ACP
-ecosystems.
+[MIT](LICENSE). Permissive, short enough to read in a minute, and compatible with
+the MCP and ACP ecosystems this project intends to join.
