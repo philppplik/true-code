@@ -20,5 +20,6 @@
 .DS_Store
 Thumbs.db
 
-# Agent harness scratch space
+# Agent harness scratch space and per-developer tool settings
 .remember/
+.claude/settings.local.json
