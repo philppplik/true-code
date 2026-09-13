@@ -1,0 +1,20 @@
+[package]
+name = "tc-config"
+description = "Layered configuration, the model catalogue and secret resolution for true-code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tc-core = { workspace = true }
+directories = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
