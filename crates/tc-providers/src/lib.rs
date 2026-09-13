@@ -140,10 +140,14 @@ pub trait Provider: Send + Sync + std::fmt::Debug {
     async fn stream(&self, request: Request) -> Result<DeltaStream, ProviderError>;
 }
 
-/// Builds the provider for a catalogue entry.
+/// Builds the provider for a resolved model.
+///
+/// Dispatch is on the wire protocol, not on the vendor: OpenRouter and any other
+/// OpenAI-compatible gateway reuse the OpenAI client with a different base URL,
+/// so supporting one more of them is a table entry rather than a new module.
 #[must_use]
-pub fn provider_for(info: &'static ModelInfo, api_key: String) -> Box<dyn Provider> {
-    match info.provider {
+pub fn provider_for(info: ModelInfo, api_key: String) -> Box<dyn Provider> {
+    match info.vendor.kind {
         ProviderKind::Anthropic => Box::new(anthropic::Anthropic::new(info, api_key)),
         ProviderKind::OpenAi => Box::new(openai::OpenAi::new(info, api_key)),
     }
