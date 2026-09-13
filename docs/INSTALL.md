@@ -101,10 +101,14 @@ OpenRouter is worth knowing about if you do not want an account per vendor. Any
 model it proxies works, whether or not this build has heard of it:
 
 ```bash
-truecode --model openrouter/anthropic/claude-sonnet-4.5
-truecode --model openrouter/openai/gpt-4.1-mini
-truecode --model openrouter/google/gemini-2.5-pro      # also fine
+truecode models llama                  # search the live list, with real prices
+truecode --model inclusionai/ling-3.0-flash-vl:free
+truecode --model anthropic/claude-sonnet-4.5
 ```
+
+Model ids are whatever OpenRouter calls them — `truecode models <filter>` asks it
+directly rather than relying on a list compiled into this build, because the
+catalogue changes weekly. `:free` variants are marked `free` in the price column.
 
 For a model true-code has no price for, the cost display reports **no cost rather
 than a guessed one**. An invented price looks exactly like a real one, which is
@@ -163,12 +167,16 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode verify` | Run this project's build, tests and lint |
 | `truecode auth status` | Which providers have a key |
 | `truecode learn` | What you have been asked about, and how it went |
+| `truecode init` | Write a starter rule file for this project |
+| `truecode update` | Check whether a newer version exists |
+| `truecode models <filter>` | Find a model id — live list with OpenRouter |
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode constraints` | Show the project rules in force |
 | `truecode config` | Resolved configuration and where each part came from |
 
 Inside a session: `Enter` sends · `Esc` aborts the running turn · `/undo` reverts
-the last change · `/help` lists commands · `Ctrl+C` quits.
+the last change · `/handoff` writes a session summary · `/help` lists commands ·
+`Ctrl+C` quits.
 
 ## Updating
 
@@ -212,6 +220,10 @@ Secret Service running. Use the environment variable instead.
 is restored from a panic hook. If it ever does, `reset` on Unix or closing the
 window on Windows fixes it, and please
 [open an issue](https://github.com/philppplik/true-code/issues) with what you did.
+
+**Am I out of date?** — `truecode update` compares the commit it was built from
+against the repository. It tells you the command rather than running it: pulling
+into a checkout you have edited is not its decision to make.
 
 **A build error after `git pull`** — `cargo clean` and build again. If it persists
 it is a real bug, not your machine; an issue with the output is useful.

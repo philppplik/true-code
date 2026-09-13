@@ -10,6 +10,7 @@
 //! inside its own UI cannot be tested in CI, scripted, or driven by an editor.
 
 mod headless;
+mod remote;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,8 +41,71 @@ const EXAMPLES: &str = "Examples:
   truecode undo                            revert the last change it made
   truecode constraints                     show the project rules in force
   truecode learn                           what you have been asked, and how it went
+  truecode models llama                    find a model id (live, with OpenRouter)
+  truecode update                          check whether a newer version exists
+  truecode init                            write a starter rule file for this project
 
 First run? `truecode doctor` tells you what is missing.";
+
+/// Starter content for `.truecode/constraints.toml`.
+const CONSTRAINTS_TEMPLATE: &str = r##"# Project rules for true-code.
+#
+# Checked mechanically before any change is applied, and restated to the model on
+# every request. Uncomment what you actually want; everything here starts off.
+#
+# Keep the list short. Every rule costs context on every request, and a rule that
+# fires on clean changes teaches people to click past it.
+#
+#   truecode constraints   # what is in force right now
+
+# --- Checked automatically -------------------------------------------------
+#
+#   ->  forbid_added    a regex that must not appear in an ADDED line
+#   ->  forbid_files    paths the change must not touch at all
+#   ->  forbid_command  a regex a shell command must not match
+#
+#   ->  in_files / except_files narrow where forbid_added applies
+#
+# The lines below are real rules, commented out. Delete the leading "# " from the
+# ones you want. Lines starting with "#   ->" are notes and stay commented.
+
+# [[constraint]]
+# description = "No unwrap() or expect() outside tests"
+# forbid_added = '\.(unwrap|expect)\('
+# in_files = ["**/src/**/*.rs"]
+# except_files = ["**/tests/**"]
+
+# [[constraint]]
+# description = "No new dependencies without discussing it"
+# forbid_added = '^\s*[a-z0-9_-]+\s*='
+# in_files = ["**/Cargo.toml", "**/package.json"]
+
+# [[constraint]]
+# description = "Do not change CI as a side effect of another task"
+# forbid_files = [".github/workflows/**"]
+
+# [[constraint]]
+# description = "Never publish or force-push from an agent session"
+# forbid_command = 'npm publish|cargo publish|git push\s+.*--force'
+
+# [[constraint]]
+# description = "Do not edit generated files by hand"
+# forbid_files = ["**/*.generated.*", "**/migrations/**"]
+
+# --- Sent to the model, NOT checked ----------------------------------------
+#
+# For anything a regex cannot express. Labelled as unchecked everywhere, because
+# a green tick nobody earned is worse than no tick.
+
+# [[reminder]]
+# text = "Comments explain why, not what."
+
+# [[reminder]]
+# text = "Say what you actually verified, and what you did not."
+
+# [[reminder]]
+# text = "Match the surrounding code; its conventions beat your preferences."
+"##;
 
 /// Command-line interface.
 #[derive(Debug, Parser)]
@@ -92,8 +156,11 @@ struct Cli {
 /// Introspection subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// List the known models with their context window and assumed price.
-    Models,
+    /// List models. With a gateway provider this asks it for the live list.
+    Models {
+        /// Only show models whose id contains this.
+        filter: Option<String>,
+    },
     /// Show the resolved configuration and where it came from.
     Config,
     /// Revert the most recent change true-code made in this project.
@@ -110,6 +177,10 @@ enum Command {
     Verify,
     /// Show what you have been asked about, and how it went.
     Learn,
+    /// Check whether a newer version of true-code exists.
+    Update,
+    /// Write a starter .truecode/constraints.toml for this project.
+    Init,
     /// Store, check or remove an API key.
     Auth {
         #[command(subcommand)]
@@ -149,12 +220,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Models) => print_models(),
+        Some(Command::Models { filter }) => print_models(&config, filter.as_deref())?,
         Some(Command::Config) => print_config(&config),
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
         Some(Command::Constraints) => print_constraints(&cwd)?,
         Some(Command::Auth { action }) => auth(&action)?,
         Some(Command::Learn) => print_learning(&cwd)?,
+        Some(Command::Update) => remote::check_for_update(),
+        Some(Command::Init) => init_project(&cwd)?,
         Some(Command::Verify) => {
             if !verify(&cwd)? {
                 std::process::exit(1);
@@ -206,16 +279,16 @@ fn start_session(
     auto_approve: bool,
     teaching: bool,
 ) -> anyhow::Result<i32> {
-    let info = config.model_info()?;
-
     // The first run should not dead-end on "set an environment variable". In an
     // interactive session we can just ask; headless has nobody to ask, so it
     // keeps the error.
-    let api_key = match config.api_key() {
-        Ok(key) => key,
-        Err(err) if prompt.is_none() => first_run_setup(info.vendor).ok_or(err)?,
-        Err(err) => return Err(err.into()),
-    };
+    let mut config = config.clone();
+    if config.api_key().is_err() && prompt.is_none() {
+        first_run_setup(&mut config, cwd);
+    }
+
+    let info = config.model_info()?;
+    let api_key = config.api_key()?;
 
     let provider: Arc<dyn tc_providers::Provider> =
         Arc::from(tc_providers::provider_for(info, api_key));
@@ -244,7 +317,7 @@ fn start_session(
             teaching: false,
             profile: tc_agent::Profile::default(),
         };
-        return headless::run(Agent::new(setup, config), &prompt);
+        return headless::run(Agent::new(setup, &config), &prompt);
     }
 
     let (approver, approvals) = tc_tui::approver();
@@ -261,7 +334,7 @@ fn start_session(
         // they have struggled with rather than starting from nothing each time.
         profile: tc_agent::Profile::load(cwd)?,
     };
-    tc_tui::run(Agent::new(setup, config), config, mode, approvals).map(|()| 0)
+    tc_tui::run(Agent::new(setup, &config), &config, mode, approvals).map(|()| 0)
 }
 
 /// Reverts the most recent change recorded in this project.
@@ -294,33 +367,60 @@ fn undo_last(cwd: &Path) -> anyhow::Result<String> {
 
 /// Offers the setup screen when no key is configured.
 ///
-/// Returns the key to use, or `None` if the user backed out — in which case the
-/// original "no key" error is the right thing to report.
-fn first_run_setup(vendor: &'static tc_config::Vendor) -> Option<String> {
-    // A failure to *draw the setup screen* must not be reported as the problem;
-    // the missing key is.
+/// Switches the session to whatever provider was chosen and writes that choice to
+/// the project config, so the next run needs no flags. Choosing a provider and
+/// then being told the configured model belongs to a different one is a dead end
+/// for exactly the person this screen exists for.
+fn first_run_setup(config: &mut Config, cwd: &Path) {
+    // A failure to *draw the setup screen* is not the problem to report; the
+    // missing key is, and the caller raises it.
     let Ok(Some(chosen)) = tc_tui::setup::run(tc_config::catalog::VENDORS) else {
-        return None;
+        return;
     };
 
     if let Err(err) = tc_config::secrets::store(chosen.vendor, &chosen.key) {
-        // Storing failed — a headless Linux box with no keyring, usually. The key
-        // still works for this session, so use it and say what happened.
+        // A headless Linux box with no keyring, usually. The key still works for
+        // this session, so use it and say so.
         eprintln!("Could not save the key ({err}). Using it for this session only.");
-    } else {
-        println!("Saved {} to the system keyring.", chosen.vendor.name);
     }
 
-    if chosen.vendor.id != vendor.id {
-        // They picked a different provider than the configured model belongs to.
-        // Saying nothing would produce a baffling auth error on the first request.
-        eprintln!(
-            "Note: the configured model is a {} model. Run `truecode --model {}/…` or set              `model` in .truecode/config.toml to use {}.",
-            vendor.name, chosen.vendor.id, chosen.vendor.name
-        );
-        return None;
+    // Only replace the model when the old one belongs to a different provider.
+    // Someone who already set `model` for this provider chose it on purpose.
+    if config.provider != chosen.vendor.id {
+        chosen.vendor.default_model.clone_into(&mut config.model);
     }
-    Some(chosen.key)
+    chosen.vendor.id.clone_into(&mut config.provider);
+
+    match tc_config::remember_provider(cwd, &config.provider, &config.model) {
+        Ok(()) => println!(
+            "Saved. Using {} with {} — change it in .truecode/config.toml or with --model.",
+            chosen.vendor.name, config.model
+        ),
+        Err(err) => eprintln!(
+            "Using {} for this session, but the choice could not be saved ({err}).",
+            chosen.vendor.name
+        ),
+    }
+}
+
+/// Writes a starter rule file.
+///
+/// Every rule in it is commented out. A template that arrives switched on would
+/// fire on the user's first change for reasons they never chose, which is how a
+/// feature gets deleted rather than understood.
+fn init_project(cwd: &Path) -> anyhow::Result<()> {
+    let path = cwd.join(".truecode").join("constraints.toml");
+
+    if path.exists() {
+        anyhow::bail!("{} already exists — edit it rather than overwriting it", path.display());
+    }
+    std::fs::create_dir_all(path.parent().unwrap_or(cwd))?;
+    std::fs::write(&path, CONSTRAINTS_TEMPLATE)?;
+
+    println!("Wrote {}", path.display());
+    println!("Every rule is commented out. Uncomment the ones you mean, then:");
+    println!("  truecode constraints");
+    Ok(())
 }
 
 /// Prints the learning profile.
@@ -579,7 +679,14 @@ Sent to the model but NOT checked:"
 ///
 /// Prices are shown rather than hidden so that a stale assumption is visible
 /// instead of quietly producing a wrong cost estimate.
-fn print_models() {
+fn print_models(config: &Config, filter: Option<&str>) -> anyhow::Result<()> {
+    // For a gateway the list has to be live: OpenRouter proxies hundreds of
+    // models and the catalogue changes weekly, so a compiled-in table would be
+    // wrong the day it shipped.
+    if config.vendor().is_ok_and(|vendor| vendor.accepts_any_model) {
+        return remote::print_gateway_models(filter);
+    }
+
     println!("{:<40} {:>10}  {:>9}  {:>9}", "MODEL", "CONTEXT", "IN/MTOK", "OUT/MTOK");
     for info in tc_config::catalog() {
         match info.price {
@@ -596,9 +703,11 @@ fn print_models() {
     }
     println!("\nPrices are indicative list prices, not a billing source of truth.");
     println!(
-        "Any `openrouter/<vendor>/<model>` also works. A model true-code cannot price\n\
-         reports no cost rather than an invented one."
+        "Configure OpenRouter and `truecode models <filter>` asks it for the live list —\n\
+         hundreds of models, real prices. A model true-code cannot price reports no cost\n\
+         rather than an invented one."
     );
+    Ok(())
 }
 
 /// Prints the resolved configuration.
@@ -660,7 +769,7 @@ mod tests {
     #[test]
     fn introspection_subcommands_are_reachable() {
         let cli = Cli::try_parse_from(["truecode", "models"]).expect("parses");
-        assert!(matches!(cli.command, Some(Command::Models)));
+        assert!(matches!(cli.command, Some(Command::Models { .. })));
     }
 
     #[test]

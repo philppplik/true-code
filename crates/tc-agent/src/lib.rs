@@ -72,12 +72,22 @@ You are true-code, a coding assistant working inside the user's project director
 Use the tools to look at the real code before answering. Do not guess at file
 contents, and do not describe code you have not read.
 
-Two things matter more than being fast:
+How to work:
 
 1. Say what you actually verified. If you did not check something, say so rather
-   than implying you did.
-2. Explain your reasoning briefly as you go, so the user understands the codebase
+   than implying you did. An unverified claim costs more than no claim, because
+   the reader spends their time discovering it was wrong.
+2. Name what your change does not cover — paths you did not test, assumptions you
+   made, cases you know are unhandled. Without being asked.
+3. Explain your reasoning briefly as you go, so the user understands the codebase
    better after your answer than before it.
+4. Comments explain why, not what. The code already says what it does.
+5. Error messages say what to do next, not only what went wrong.
+6. Match the surrounding code. Its conventions beat your preferences.
+7. If a request seems wrong, say so in one sentence, then do it anyway unless it
+   is unsafe. It is their project.
+8. Prefer the smallest change that solves the problem. A large diff gets reviewed
+   late and shallowly, which is how bugs get merged.
 
 ";
 
@@ -715,6 +725,61 @@ impl Agent {
         }
     }
 
+    /// Writes a summary of this session to `.truecode/handoffs/`.
+    ///
+    /// Context quality degrades with length long before a window is full, so the
+    /// right move is often to stop and start fresh — which people avoid because
+    /// it means losing the thread. This writes the thread down first.
+    pub fn write_handoff(&self) -> Result<std::path::PathBuf, std::io::Error> {
+        let dir = self.tool_ctx.root().join(".truecode").join("handoffs");
+        std::fs::create_dir_all(&dir)?;
+
+        let now = chrono::Utc::now();
+        let path = dir.join(format!("{}.md", now.format("%Y-%m-%dT%H-%M-%S")));
+
+        let mut out = format!(
+            "# Session handoff\n\n- **When:** {}\n- **Model:** {}\n- **Spent:** {}\n",
+            now.format("%Y-%m-%d %H:%M UTC"),
+            self.provider.id(),
+            self.spent.display(),
+        );
+        if let Some(log) = self.log.path() {
+            let _ = writeln!(out, "- **Session log:** `{}`", log.display());
+        }
+
+        out.push_str("\n## Changed\n\n");
+        if self.proof.changed.is_empty() {
+            out.push_str("Nothing.\n");
+        } else {
+            for changed in &self.proof.changed {
+                let _ = writeln!(out, "- `{changed}`");
+            }
+        }
+
+        out.push_str("\n## Verified\n\n");
+        if self.proof.checks.is_empty() {
+            // The handoff has to carry the same honesty as the proof panel, or a
+            // future reader inherits work they believe was checked.
+            out.push_str("Nothing was checked. This is unverified work.\n");
+        } else {
+            for check in &self.proof.checks {
+                let mark = if check.passed() { "ok" } else { "FAILED" };
+                let _ = writeln!(out, "- {mark}: `{}` (exit {})", check.command, check.exit_code);
+            }
+        }
+
+        // The last thing said is usually the thread worth picking up.
+        if let Some(last) = self.history.iter().rev().find(|msg| msg.role == Role::Assistant) {
+            let text = last.text_content();
+            if !text.trim().is_empty() {
+                let _ = write!(out, "\n## Where it was left\n\n{}\n", text.trim());
+            }
+        }
+
+        std::fs::write(&path, out)?;
+        Ok(path)
+    }
+
     /// Undoes the most recent change true-code made in this session.
     pub fn undo_last(&mut self) -> Result<String, UndoError> {
         let (events_path, session_dir) = match (self.log.path(), self.log.directory()) {
@@ -967,6 +1032,14 @@ mod tests {
     fn the_loop_message_names_the_offending_tool() {
         let message = FinishReason::Loop { tool: "grep".to_owned() }.message();
         assert!(message.contains("grep"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn the_prompt_asks_for_the_two_habits_that_matter_most() {
+        // The rest of the preset is style. These two are why an answer can be
+        // trusted at all.
+        assert!(SYSTEM_PROMPT.contains("Say what you actually verified"));
+        assert!(SYSTEM_PROMPT.contains("Name what your change does not cover"));
     }
 
     #[test]

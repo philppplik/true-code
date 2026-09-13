@@ -8,7 +8,36 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Choosing a provider in setup now works.** It writes both the provider *and* a
+  matching model to `.truecode/config.toml`, instead of saving the key and then
+  failing because the configured model belonged to someone else. That was a dead
+  end for exactly the person the setup screen exists for.
+- **Gateway model ids resolve.** `inclusionai/ling-3.0-flash-vl:free` — which is
+  how OpenRouter actually names models — was being split at the first slash and
+  looked up as a vendor called `inclusionai`. The configured provider now decides
+  how an id is read, which is the only rule that survives a gateway whose ids look
+  exactly like our prefixed form.
+
 ### Added
+
+- **`truecode models <filter>`** asks OpenRouter for the **live** list — hundreds
+  of models with real prices, `:free` variants marked as free. A compiled-in table
+  would be wrong the day it shipped.
+- **`truecode update`** compares the commit this binary was built from against the
+  repository. It prints the update command rather than running it.
+- **`truecode init`** writes a starter `.truecode/constraints.toml`. Every rule is
+  commented out: a template that arrives switched on fires on your first change
+  for reasons you never chose.
+- **`/handoff`** writes a session summary to `.truecode/handoffs/` — what changed,
+  what was verified, where it was left. Context degrades long before a window is
+  full, and starting fresh is easier when the thread is written down.
+- The default system prompt now carries the working practices this project was
+  built with: say what you actually verified, name what your change does not
+  cover, comments explain why, smallest change that works.
+
+### Earlier in this cycle
 
 - **The comprehension check** (`--learn`). A run that changed code ends with one
   question about that change, then the explanation — shown whether the answer was

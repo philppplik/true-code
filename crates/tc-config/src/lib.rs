@@ -60,9 +60,27 @@ pub enum ConfigError {
     #[error(transparent)]
     MissingApiKey(#[from] SecretError),
 
-    /// The configured model is not in the catalogue.
-    #[error("unknown model `{0}` — run `true-code models` to list the supported ones")]
-    UnknownModel(String),
+    /// The configured model is not one this provider offers.
+    #[error("`{provider}` has no model `{model}` — run `truecode models` to see what it does have")]
+    UnknownModel {
+        /// What was asked for.
+        model: String,
+        /// Which provider was asked.
+        provider: &'static str,
+    },
+
+    /// The configured provider is not one true-code knows.
+    #[error("unknown provider `{0}` — use anthropic, openai or openrouter")]
+    UnknownProvider(String),
+
+    /// The config file could not be written.
+    #[error("cannot write {path}: {source}")]
+    Write {
+        /// The file that could not be written.
+        path: PathBuf,
+        /// The underlying error.
+        source: std::io::Error,
+    },
 }
 
 /// Spending limits for a session.
@@ -103,7 +121,13 @@ impl Budget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Qualified model identifier, e.g. `anthropic/claude-sonnet-4-5`.
+    /// Which provider to talk to: `anthropic`, `openai` or `openrouter`.
+    ///
+    /// Decides how [`Self::model`] is read. A gateway's own ids look exactly like
+    /// our prefixed form — `anthropic/claude-sonnet-4.5` is a real OpenRouter
+    /// model — so the provider has to be stated rather than guessed.
+    pub provider: String,
+    /// The model, as the chosen provider names it.
     pub model: String,
     /// Spending limits.
     pub budget: Budget,
@@ -117,6 +141,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            provider: catalog::DEFAULT_VENDOR.to_owned(),
             model: catalog::DEFAULT_MODEL.to_owned(),
             budget: Budget::default(),
             system_prompt: None,
@@ -145,9 +170,19 @@ impl Config {
         Ok(config)
     }
 
+    /// The configured provider.
+    pub fn vendor(&self) -> Result<&'static Vendor, ConfigError> {
+        catalog::vendor(&self.provider)
+            .ok_or_else(|| ConfigError::UnknownProvider(self.provider.clone()))
+    }
+
     /// Looks up the catalogue entry for the configured model.
     pub fn model_info(&self) -> Result<ModelInfo, ConfigError> {
-        lookup(&self.model).ok_or_else(|| ConfigError::UnknownModel(self.model.clone()))
+        let vendor = self.vendor()?;
+        catalog::lookup_for(vendor, &self.model).ok_or_else(|| ConfigError::UnknownModel {
+            model: self.model.clone(),
+            provider: vendor.id,
+        })
     }
 
     /// Reads the API key for the configured model's provider.
@@ -157,6 +192,37 @@ impl Config {
         let info = self.model_info()?;
         Ok(secrets::key_for(info.vendor)?.0)
     }
+}
+
+/// Records the chosen provider and model in the project's config file.
+///
+/// Written after the setup screen so the next run needs no flags. Only these two
+/// keys are touched; anything else already in the file is kept, because a setup
+/// step that silently discards someone's budget limit has done real damage.
+pub fn remember_provider(root: &Path, provider: &str, model: &str) -> Result<(), ConfigError> {
+    let path = root.join(PROJECT_DIR).join(CONFIG_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let kept: String = existing
+        .lines()
+        .filter(|line| {
+            let key = line.split('=').next().unwrap_or("").trim();
+            key != "provider" && key != "model"
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut out = format!("provider = \"{provider}\"\nmodel = \"{model}\"\n");
+    if !kept.trim().is_empty() {
+        out.push_str(kept.trim());
+        out.push('\n');
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|source| ConfigError::Write { path: path.clone(), source })?;
+    }
+    std::fs::write(&path, out).map_err(|source| ConfigError::Write { path, source })
 }
 
 /// Path of the user-level configuration file, if a home directory exists.
@@ -182,6 +248,7 @@ fn merge(base: Config, path: &Path) -> Result<Config, ConfigError> {
     })?;
 
     Ok(Config {
+        provider: layer.provider.unwrap_or(base.provider),
         model: layer.model.unwrap_or(base.model),
         budget: layer.budget.unwrap_or(base.budget),
         system_prompt: layer.system_prompt.or(base.system_prompt),
@@ -193,6 +260,7 @@ fn merge(base: Config, path: &Path) -> Result<Config, ConfigError> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigLayer {
+    provider: Option<String>,
     model: Option<String>,
     budget: Option<Budget>,
     system_prompt: Option<String>,

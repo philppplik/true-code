@@ -21,8 +21,11 @@
 
 use tc_core::Price;
 
+/// Provider used when nothing else is configured.
+pub const DEFAULT_VENDOR: &str = "anthropic";
+
 /// Model used when nothing else is configured.
-pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
+pub const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 
 /// Which wire protocol a model speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +53,12 @@ pub struct Vendor {
     pub api_key_env: &'static str,
     /// Where to get a key, for the setup screen.
     pub signup_url: &'static str,
+    /// Model to start with when this provider is chosen in setup.
+    ///
+    /// Choosing a provider and then being told the configured model belongs to a
+    /// different one is a dead end for exactly the person the setup screen exists
+    /// for. So picking a provider picks a model too.
+    pub default_model: &'static str,
     /// Whether any model identifier is accepted, not only catalogued ones.
     ///
     /// True for gateways that proxy a catalogue far larger than we could track.
@@ -65,6 +74,7 @@ pub static VENDORS: &[Vendor] = &[
         base_url: "https://api.anthropic.com",
         api_key_env: "ANTHROPIC_API_KEY",
         signup_url: "https://console.anthropic.com/settings/keys",
+        default_model: "claude-sonnet-4-5",
         accepts_any_model: false,
     },
     Vendor {
@@ -74,6 +84,7 @@ pub static VENDORS: &[Vendor] = &[
         base_url: "https://api.openai.com",
         api_key_env: "OPENAI_API_KEY",
         signup_url: "https://platform.openai.com/api-keys",
+        default_model: "gpt-4.1",
         accepts_any_model: false,
     },
     Vendor {
@@ -83,6 +94,7 @@ pub static VENDORS: &[Vendor] = &[
         base_url: "https://openrouter.ai/api",
         api_key_env: "OPENROUTER_API_KEY",
         signup_url: "https://openrouter.ai/keys",
+        default_model: "anthropic/claude-sonnet-4.5",
         // One key, hundreds of models from every vendor. Pinning that to a fixed
         // list would make most of them unreachable for no benefit.
         accepts_any_model: true,
@@ -228,29 +240,54 @@ pub fn catalog() -> Vec<ModelInfo> {
     KNOWN.iter().map(build).collect()
 }
 
-/// Resolves a model identifier.
+/// Resolves a model identifier against a chosen provider.
 ///
-/// Catalogued models come back with their price. An identifier belonging to a
-/// gateway that proxies anything resolves with **no** price rather than being
-/// rejected, so a model newer than this build is still reachable.
+/// The provider decides how the identifier is read, which is the only rule that
+/// survives contact with a gateway. OpenRouter's own ids look exactly like our
+/// prefixed form — `anthropic/claude-sonnet-4.5` is a real OpenRouter model —
+/// so guessing from the prefix alone gets it wrong for the people most likely to
+/// be confused already.
+///
+/// With a passthrough provider the identifier is taken **verbatim**, minus an
+/// optional `<provider>/` prefix. That is what makes
+/// `inclusionai/ling-3.0-flash-vl:free` work, which is how OpenRouter actually
+/// names its models.
+#[must_use]
+pub fn lookup_for(provider: &'static Vendor, id: &str) -> Option<ModelInfo> {
+    let bare = id.strip_prefix(&format!("{}/", provider.id)).unwrap_or(id);
+
+    // The table wins when it knows the model, because it knows the price.
+    let catalogued = KNOWN
+        .iter()
+        .find(|known| known.vendor == provider.id && (known.id == id || known.api_model == bare));
+    if let Some(known) = catalogued {
+        return Some(build(known));
+    }
+
+    if !provider.accepts_any_model || bare.is_empty() {
+        return None;
+    }
+
+    Some(ModelInfo {
+        id: format!("{}/{bare}", provider.id),
+        api_model: bare.to_owned(),
+        vendor: provider,
+        context_window: UNKNOWN_CONTEXT_WINDOW,
+        price: None,
+    })
+}
+
+/// Resolves a model identifier that names its own provider.
+///
+/// Used when no provider is configured — the identifier has to carry it.
 #[must_use]
 pub fn lookup(id: &str) -> Option<ModelInfo> {
     if let Some(known) = KNOWN.iter().find(|known| known.id == id) {
         return Some(build(known));
     }
 
-    // `openrouter/anthropic/claude-opus-4.5` → vendor `openrouter`, model
-    // `anthropic/claude-opus-4.5`.
-    let (prefix, rest) = id.split_once('/')?;
-    let vendor = vendor(prefix)?;
-
-    (vendor.accepts_any_model && !rest.is_empty()).then(|| ModelInfo {
-        id: id.to_owned(),
-        api_model: rest.to_owned(),
-        vendor,
-        context_window: UNKNOWN_CONTEXT_WINDOW,
-        price: None,
-    })
+    let (prefix, _) = id.split_once('/')?;
+    lookup_for(vendor(prefix)?, id)
 }
 
 /// Turns a table entry into a resolved model.
@@ -269,8 +306,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_model_is_in_the_catalogue() {
-        assert!(lookup(DEFAULT_MODEL).is_some());
+    fn the_defaults_resolve_together() {
+        let vendor = vendor(DEFAULT_VENDOR).expect("the default provider exists");
+        assert!(lookup_for(vendor, DEFAULT_MODEL).is_some(), "the defaults must work as a pair");
     }
 
     #[test]
@@ -301,6 +339,45 @@ mod tests {
                 info.id
             );
         }
+    }
+
+    #[test]
+    fn a_gateway_model_id_is_taken_verbatim() {
+        // This is how OpenRouter actually names models, and splitting it on the
+        // first slash to look for a vendor called "inclusionai" is what broke.
+        let openrouter = vendor("openrouter").expect("known");
+        let info = lookup_for(openrouter, "inclusionai/ling-3.0-flash-vl:free")
+            .expect("a real OpenRouter id must resolve");
+
+        assert_eq!(info.api_model, "inclusionai/ling-3.0-flash-vl:free");
+        assert_eq!(info.vendor.id, "openrouter");
+    }
+
+    #[test]
+    fn a_gateway_id_may_also_carry_our_prefix() {
+        let openrouter = vendor("openrouter").expect("known");
+        let with = lookup_for(openrouter, "openrouter/meta/llama-4").expect("resolves");
+        let without = lookup_for(openrouter, "meta/llama-4").expect("resolves");
+
+        assert_eq!(with.api_model, without.api_model, "both spellings mean the same model");
+        assert_eq!(with.api_model, "meta/llama-4");
+    }
+
+    #[test]
+    fn a_vendor_shared_with_the_gateway_follows_the_chosen_provider() {
+        // `anthropic/claude-sonnet-4.5` is a real OpenRouter model *and* looks
+        // like our direct-Anthropic form. The configured provider decides, or the
+        // people most likely to be confused get the wrong one.
+        let openrouter = vendor("openrouter").expect("known");
+        let info = lookup_for(openrouter, "anthropic/claude-sonnet-4.5").expect("resolves");
+
+        assert_eq!(info.vendor.id, "openrouter");
+    }
+
+    #[test]
+    fn a_fixed_provider_still_rejects_a_model_it_does_not_have() {
+        let anthropic = vendor("anthropic").expect("known");
+        assert!(lookup_for(anthropic, "made-up-model").is_none());
     }
 
     #[test]
@@ -349,6 +426,11 @@ mod tests {
             assert!(
                 vendor.signup_url.starts_with("https://"),
                 "{} has nowhere to get a key",
+                vendor.id
+            );
+            assert!(
+                lookup_for(vendor, vendor.default_model).is_some(),
+                "{}'s starting model does not resolve — setup would dead-end",
                 vendor.id
             );
         }

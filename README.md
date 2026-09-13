@@ -97,13 +97,16 @@ goes into your OS keyring — never into a file. Or do it up front:
 ```bash
 truecode auth login openrouter    # or: anthropic, openai
 truecode doctor                   # checks model, key, rules, session directory
+truecode init                     # a starter rule file for this project
+truecode update                   # am I behind?
 ```
 
 **OpenRouter gives you every vendor with one key**, which is the least painful
 place to start:
 
 ```bash
-truecode --model openrouter/anthropic/claude-sonnet-4.5
+truecode models llama                                  # live list, real prices
+truecode --model inclusionai/ling-3.0-flash-vl:free
 ```
 
 Step-by-step, including Windows specifics and what to do when something goes
