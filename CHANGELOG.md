@@ -10,6 +10,31 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **The constraint ledger.** Project rules in `.truecode/constraints.toml` are
+  restated to the model on every request *and* checked mechanically against each
+  change before it is applied. A violation turns the confirmation modal red and
+  lists the broken rule above the diff
+  ([ADR 0008](docs/adr/0008-constraint-ledger.md)).
+- Three checkable rule shapes — `forbid_added` (scoped by `in_files` /
+  `except_files`), `forbid_files`, `forbid_command` — plus `[[reminder]]` for
+  anything that cannot be checked, labelled as such everywhere.
+- `true-code constraints` lists what is in force and what is only a reminder.
+- `--yes` now refuses a change that breaks a rule. It means "do not ask me about
+  routine changes", not "ignore the rules I wrote down".
+- A blanket "always allow this tool" no longer covers a change that breaks a rule.
+- `constraint_violated` is recorded in the session log whether or not the change
+  was allowed, so "I was warned and said yes" stays distinguishable from "nobody
+  noticed".
+- A malformed ledger is a hard error naming the offending rule and field, rather
+  than a silently skipped rule.
+
+### Changed
+
+- `Agent::new` takes an `AgentSetup` struct instead of seven positional
+  arguments. Pre-1.0 breaking change to the library API.
+
+### Earlier in this cycle
+
 - **Undo.** `/undo` in the TUI and `true-code undo` from the shell revert the last
   change true-code made. Run it again to step further back. Files are copied aside
   before they are changed, and undo is derived entirely from the session log — so

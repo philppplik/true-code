@@ -17,9 +17,10 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use tc_agent::approval::ApproveAll;
-use tc_agent::{Agent, Approver, DenyAll, PermissionMode, SessionLog};
+use tc_agent::{Agent, AgentSetup, Approver, DenyAll, PermissionMode, SessionLog};
 use tc_config::Config;
 use tc_core::SessionId;
+use tc_tools::Ledger;
 use tc_tools::{ToolContext, ToolSet};
 
 /// Command-line interface.
@@ -71,6 +72,8 @@ enum Command {
     ///
     /// Reads the newest session log, so it works long after the session ended.
     Undo,
+    /// Show the project rules and whether each one is checked automatically.
+    Constraints,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -91,6 +94,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Models) => print_models(),
         Some(Command::Config) => print_config(&config),
         Some(Command::Undo) => println!("{}", undo_last(&cwd)?),
+        Some(Command::Constraints) => print_constraints(&cwd)?,
         None => {
             let mode = PermissionMode::parse(&cli.permission_mode).ok_or_else(|| {
                 // Never fall back to a default here: guessing a permission level
@@ -135,19 +139,39 @@ fn start_session(
     let tools = ToolSet::for_mode(mode);
     let log = SessionLog::create(cwd, SessionId::new());
 
+    // Loaded before anything runs: a rule the user wrote down but that does not
+    // compile must stop the session, not be silently skipped.
+    let ledger = Ledger::load(cwd)?;
+
     if let Some(prompt) = prompt {
         // Nobody is watching a headless run, so the choice is between an explicit
         // opt-in and refusing. It is never "apply and hope".
         let approver: Arc<dyn Approver> =
             if auto_approve { Arc::new(ApproveAll) } else { Arc::new(DenyAll) };
 
-        let agent = Agent::new(provider, tools, ToolContext::new(cwd), config, log, approver, mode);
-        return headless::run(agent, &prompt);
+        let setup = AgentSetup {
+            provider,
+            tools,
+            tool_ctx: ToolContext::new(cwd),
+            ledger,
+            log,
+            approver,
+            mode,
+        };
+        return headless::run(Agent::new(setup, config), &prompt);
     }
 
     let (approver, approvals) = tc_tui::approver();
-    let agent = Agent::new(provider, tools, ToolContext::new(cwd), config, log, approver, mode);
-    tc_tui::run(agent, config, mode, approvals).map(|()| 0)
+    let setup = AgentSetup {
+        provider,
+        tools,
+        tool_ctx: ToolContext::new(cwd),
+        ledger,
+        log,
+        approver,
+        mode,
+    };
+    tc_tui::run(Agent::new(setup, config), config, mode, approvals).map(|()| 0)
 }
 
 /// Reverts the most recent change recorded in this project.
@@ -176,6 +200,36 @@ fn undo_last(cwd: &Path) -> anyhow::Result<String> {
         Some(_) => format!("Reverted {}.", entry.path),
         None => format!("Removed {}, which true-code had created.", entry.path),
     })
+}
+
+/// Prints the project's rules.
+///
+/// Checked and unchecked rules are listed separately, because a user who cannot
+/// tell them apart will trust a reminder as if it were enforced.
+fn print_constraints(cwd: &Path) -> anyhow::Result<()> {
+    let ledger = Ledger::load(cwd)?;
+
+    if ledger.is_empty() {
+        println!("No rules. Create {} to add some.", tc_tools::constraints::CONSTRAINTS_FILE);
+        return Ok(());
+    }
+
+    if !ledger.constraints().is_empty() {
+        println!("Checked automatically before any change is applied:");
+        for rule in ledger.constraints() {
+            println!("  [x] {}", rule.description);
+        }
+    }
+    if !ledger.reminders().is_empty() {
+        println!(
+            "
+Sent to the model but NOT checked:"
+        );
+        for note in ledger.reminders() {
+            println!("  [ ] {note}");
+        }
+    }
+    Ok(())
 }
 
 /// Prints the model catalogue.

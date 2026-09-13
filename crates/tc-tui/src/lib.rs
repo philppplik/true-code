@@ -99,6 +99,7 @@ async fn run_async(
         agent.price(),
         config.budget,
         mode,
+        agent.rule_count(),
     );
 
     let agent = Arc::new(Mutex::new(agent));

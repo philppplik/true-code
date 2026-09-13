@@ -30,15 +30,17 @@ pub mod session;
 
 pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
 pub use checkpoint::UndoError;
-pub use tc_tools::{Effect, PermissionMode, Risk};
+pub use tc_tools::{Effect, Ledger, PermissionMode, Risk, Violation};
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use futures::StreamExt as _;
 use tc_config::Config;
 use tc_core::{Content, Cost, Delta, EventKind, Message, Role, StopReason, ToolResult, Usage};
 use tc_providers::{Provider, Request, ToolSchema};
 use tc_tools::{ToolContext, ToolSet};
+
 use tokio::sync::mpsc;
 
 pub use session::SessionLog;
@@ -230,6 +232,8 @@ pub struct Agent {
     approved_tools: std::collections::HashSet<String>,
     /// Saves file contents before a tool overwrites them.
     checkpoints: checkpoint::Checkpoints,
+    /// The project's rules, checked before any change is applied.
+    ledger: Ledger,
     /// Conversation so far, carried across prompts within a session.
     history: Vec<Message>,
     /// Running session total.
@@ -237,18 +241,34 @@ pub struct Agent {
     log: SessionLog,
 }
 
+/// Everything an [`Agent`] needs to exist.
+///
+/// A struct rather than seven positional arguments: at this length a call site
+/// stops being readable, and swapping two of them would compile.
+#[derive(Debug)]
+pub struct AgentSetup {
+    /// Where model turns come from.
+    pub provider: std::sync::Arc<dyn Provider>,
+    /// What the agent may call.
+    pub tools: ToolSet,
+    /// Which directory it may touch.
+    pub tool_ctx: ToolContext,
+    /// The project's rules.
+    pub ledger: Ledger,
+    /// Where the session is recorded.
+    pub log: SessionLog,
+    /// Who decides whether a change may be applied.
+    pub approver: std::sync::Arc<dyn Approver>,
+    /// How much the agent is allowed to do.
+    pub mode: PermissionMode,
+}
+
 impl Agent {
-    /// Builds an agent for the given provider and workspace.
+    /// Builds an agent from its setup.
     #[must_use]
-    pub fn new(
-        provider: std::sync::Arc<dyn Provider>,
-        tools: ToolSet,
-        tool_ctx: ToolContext,
-        config: &Config,
-        log: SessionLog,
-        approver: std::sync::Arc<dyn Approver>,
-        mode: PermissionMode,
-    ) -> Self {
+    pub fn new(setup: AgentSetup, config: &Config) -> Self {
+        let AgentSetup { provider, tools, tool_ctx, ledger, log, approver, mode } = setup;
+
         let schemas = tools
             .tools()
             .iter()
@@ -264,16 +284,20 @@ impl Agent {
             tools,
             tool_ctx,
             schemas,
-            system_prompt: config
-                .system_prompt
-                .clone()
-                .unwrap_or_else(|| format!("{SYSTEM_PROMPT}{}", mode_prompt(mode))),
+            // The ledger goes last, after the cacheable prefix and the mode
+            // section. All three are stable for the whole session, so the prompt
+            // cache still hits — and the rules are restated in full on every
+            // request instead of decaying with the conversation.
+            system_prompt: config.system_prompt.clone().unwrap_or_else(|| {
+                format!("{SYSTEM_PROMPT}{}{}", mode_prompt(mode), ledger.prompt_section())
+            }),
             budget: config.budget,
             approver,
             approved_tools: std::collections::HashSet::new(),
             checkpoints: checkpoint::Checkpoints::new(
                 log.directory().unwrap_or_else(|| std::path::PathBuf::from(".")),
             ),
+            ledger,
             history: Vec::new(),
             spent: Cost::default(),
             log,
@@ -302,6 +326,12 @@ impl Agent {
     #[must_use]
     pub fn context_window(&self) -> u32 {
         self.provider.context_window()
+    }
+
+    /// How many project rules are being checked.
+    #[must_use]
+    pub fn rule_count(&self) -> usize {
+        self.ledger.constraints().len()
     }
 
     /// Indicative price of the model in use.
@@ -437,21 +467,37 @@ impl Agent {
             Err(err) => return Gate::Failed(err.to_string()),
         };
 
+        let violations = match &effect {
+            Effect::Write(diff) => self.ledger.check_diff(diff),
+            Effect::Execute { command, .. } => self.ledger.check_command(command),
+            Effect::ReadOnly => Vec::new(),
+        };
+
+        for violation in &violations {
+            self.log.append(EventKind::ConstraintViolated {
+                call_id: call.id.clone(),
+                description: violation.description.clone(),
+                evidence: violation.evidence.clone(),
+            });
+        }
+
         if !effect.needs_approval() {
-            return Gate::Run(effect);
+            return Gate::Run { effect, violations };
         }
         // A write that changes nothing is not worth a prompt. Prompts people
         // learn to dismiss are prompts that have stopped protecting them.
         if let Effect::Write(diff) = &effect
             && diff.is_empty()
         {
-            return Gate::Run(effect);
+            return Gate::Run { effect, violations };
         }
-        if self.approved_tools.contains(&call.name) {
-            return Gate::Run(effect);
+        // A blanket "always allow this tool" does not extend to a change that
+        // breaks a stated rule. That is precisely the case worth interrupting for.
+        if self.approved_tools.contains(&call.name) && violations.is_empty() {
+            return Gate::Run { effect, violations };
         }
 
-        let request = ApprovalRequest { tool: call.name.clone(), effect };
+        let request = ApprovalRequest { tool: call.name.clone(), effect, violations };
         let summary = request.summary();
         let decision = self.approver.approve(&request).await;
 
@@ -463,10 +509,12 @@ impl Agent {
         });
 
         match decision {
-            Decision::Approve => Gate::Run(request.effect),
+            Decision::Approve => {
+                Gate::Run { effect: request.effect, violations: request.violations }
+            }
             Decision::ApproveToolForSession => {
                 self.approved_tools.insert(call.name.clone());
-                Gate::Run(request.effect)
+                Gate::Run { effect: request.effect, violations: request.violations }
             }
             Decision::Deny | Decision::Abort => {
                 send(events, AgentEvent::ToolDeclined { tool: call.name.clone(), summary }).await;
@@ -548,8 +596,11 @@ impl Agent {
             });
 
             // Nothing touches the disk before this returns.
-            match self.authorise(call, events).await {
-                Gate::Run(effect) => self.checkpoint(call, &effect, events).await,
+            let broken = match self.authorise(call, events).await {
+                Gate::Run { effect, violations } => {
+                    self.checkpoint(call, &effect, events).await;
+                    violations
+                }
                 Gate::Aborted => return ToolsOutcome::Aborted,
                 refusal => {
                     // Every call still gets a result. A tool call left unanswered
@@ -566,7 +617,7 @@ impl Agent {
                     .await;
                     continue;
                 }
-            }
+            };
 
             send(
                 events,
@@ -582,10 +633,24 @@ impl Agent {
 
             // A failed tool is context, not a crash: the model reads the error
             // and usually corrects itself on the next turn.
-            let (output, is_error) = match outcome {
+            let (mut output, is_error) = match outcome {
                 Ok(output) => (output, false),
                 Err(err) => (err.to_string(), true),
             };
+
+            // The model is told when a change it made broke a stated rule, even
+            // though the user allowed it. Otherwise it reads the approval as
+            // permission to keep doing it.
+            if !is_error && !broken.is_empty() {
+                output.push_str("\n\nThis change broke rules the user set:\n");
+                for violation in &broken {
+                    let _ = writeln!(output, "  - {}", violation.summary());
+                }
+                output.push_str(
+                    "They allowed it this time. Do not treat that as permission to break them \
+                     again; mention it in your answer.",
+                );
+            }
 
             self.log.append(EventKind::ToolCompleted {
                 call_id: call.id.clone(),
@@ -604,8 +669,13 @@ impl Agent {
 /// Whether a call may proceed, and with what effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Gate {
-    /// Cleared to run. Carries the previewed effect, which the checkpoint needs.
-    Run(Effect),
+    /// Cleared to run.
+    Run {
+        /// The previewed effect, which the checkpoint needs.
+        effect: Effect,
+        /// Rules this change breaks, if the user allowed it anyway.
+        violations: Vec<Violation>,
+    },
     /// The user said no; the run continues.
     Declined,
     /// The user said no and ended the run.
@@ -622,7 +692,7 @@ impl Gate {
     fn message(&self) -> String {
         match self {
             // `Run` never reaches here; it is not a refusal.
-            Self::Run(_) | Self::Declined | Self::Aborted => {
+            Self::Run { .. } | Self::Declined | Self::Aborted => {
                 "The user declined this change. Do not retry it. Ask what they would prefer \
                  instead, or continue with the rest of the task."
                     .to_owned()

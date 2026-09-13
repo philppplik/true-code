@@ -75,6 +75,18 @@ pub enum EventKind {
         /// Arguments the model supplied.
         input: serde_json::Value,
     },
+    /// A proposed change broke a rule the user stated.
+    ///
+    /// Recorded whether or not the user then allowed it: "I was warned and said
+    /// yes" and "nobody noticed" must be distinguishable afterwards.
+    ConstraintViolated {
+        /// Identifier of the tool call that would break it.
+        call_id: String,
+        /// The rule, in the user's words.
+        description: String,
+        /// What specifically broke it.
+        evidence: String,
+    },
     /// A human decided whether a change could go ahead.
     ///
     /// Recorded separately from the tool call so the audit trail answers "who

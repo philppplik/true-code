@@ -44,6 +44,10 @@ Roadmap: [`docs/PLAN-v0.1.md`](docs/PLAN-v0.1.md)
 - **Guard rails that stop with a reason** — turn limit, session budget, and loop
   detection for an agent repeating itself. No silent stops.
 - **Live token and cost accounting**, with a budget that actually halts the run.
+- **Project rules that are actually checked.** Write them once in
+  `.truecode/constraints.toml`; they are restated on every request *and* verified
+  against the change before it is applied
+  ([ADR 0008](docs/adr/0008-constraint-ledger.md)).
 - **Undo.** `/undo` in the TUI, or `true-code undo` from the shell — which works
   long after the session ended, because it reads the session log
   ([ADR 0007](docs/adr/0007-undo-from-the-event-log.md)).
@@ -110,6 +114,44 @@ There is deliberately no "apply on Enter".
 
 Headless runs refuse changes, because there is nobody to ask. `--yes` approves
 everything and is meant for CI — it is exactly as dangerous as it sounds.
+
+### Project rules
+
+The measured failure of CLI agents is not bad code — it is ignoring a rule you
+stated. Saying it once in a prompt does not survive ten turns. So write it down:
+
+```toml
+# .truecode/constraints.toml
+[[constraint]]
+description = "No unwrap() in production code"
+forbid_added = '\.unwrap\('
+in_files = ["**/src/**/*.rs"]
+
+[[constraint]]
+description = "Never publish from an agent session"
+forbid_command = 'cargo publish'
+
+[[reminder]]
+text = "Comments explain why, not what."
+```
+
+Rules are restated to the model on every request **and** checked against the
+change before it is applied. A violation turns the confirmation red and lists the
+rule above the diff — you still decide, but you decide knowingly.
+
+`[[reminder]]` entries are sent to the model but **not** checked. They are
+labelled that way everywhere, because a green tick nobody earned is worse than no
+tick at all.
+
+```bash
+true-code constraints   # what is in force, and what is only a reminder
+```
+
+In headless mode `--yes` still refuses a change that breaks a rule. "Do not ask me
+about routine changes" is not "ignore the rules I wrote down".
+
+This repository uses its own ledger — see
+[`.truecode/constraints.toml`](.truecode/constraints.toml).
 
 ### Taking a change back
 

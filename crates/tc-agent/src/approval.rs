@@ -11,7 +11,7 @@
 //! the model and the disk, and the failure would be silent until someone read the
 //! diff. Opting in is one flag; opting out of a surprise is not possible.
 
-use tc_tools::Effect;
+use tc_tools::{Effect, Violation};
 
 /// What the human decided about one tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +36,8 @@ pub struct ApprovalRequest {
     pub tool: String,
     /// Exactly what it would do.
     pub effect: Effect,
+    /// Project rules this change would break, if any.
+    pub violations: Vec<Violation>,
 }
 
 impl ApprovalRequest {
@@ -43,6 +45,12 @@ impl ApprovalRequest {
     #[must_use]
     pub fn summary(&self) -> String {
         self.effect.summary()
+    }
+
+    /// Whether this change breaks a rule the user wrote down.
+    #[must_use]
+    pub fn breaks_a_rule(&self) -> bool {
+        !self.violations.is_empty()
     }
 }
 
@@ -66,17 +74,22 @@ impl Approver for DenyAll {
     }
 }
 
-/// Approves everything.
+/// Approves anything that does not break a stated rule.
 ///
 /// Only for an explicit, documented opt-in — `--yes` in headless mode — and for
 /// tests. Never the default anywhere.
+///
+/// It still refuses a change that violates the constraint ledger. `--yes` means
+/// "do not ask me about routine changes", not "ignore the rules I wrote down" —
+/// and CI, where this runs, is exactly where an unattended violation does the
+/// most damage.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ApproveAll;
 
 #[async_trait::async_trait]
 impl Approver for ApproveAll {
-    async fn approve(&self, _request: &ApprovalRequest) -> Decision {
-        Decision::Approve
+    async fn approve(&self, request: &ApprovalRequest) -> Decision {
+        if request.breaks_a_rule() { Decision::Deny } else { Decision::Approve }
     }
 }
 
@@ -87,6 +100,7 @@ mod tests {
 
     fn write_request() -> ApprovalRequest {
         ApprovalRequest {
+            violations: Vec::new(),
             tool: "write_file".to_owned(),
             effect: Effect::Write(FileDiff::new("src/lib.rs", Some("a\n"), "b\n")),
         }
@@ -102,6 +116,21 @@ mod tests {
         assert_eq!(ApproveAll.approve(&write_request()).await, Decision::Approve);
     }
 
+    #[tokio::test]
+    async fn the_opt_in_approver_still_refuses_a_change_that_breaks_a_rule() {
+        let mut request = write_request();
+        request.violations.push(Violation {
+            description: "No unwrap()".to_owned(),
+            evidence: "src/lib.rs: a.unwrap();".to_owned(),
+        });
+
+        assert_eq!(
+            ApproveAll.approve(&request).await,
+            Decision::Deny,
+            "--yes must not mean 'ignore the rules I wrote down'"
+        );
+    }
+
     #[test]
     fn a_write_request_summarises_the_file_and_the_line_counts() {
         assert_eq!(write_request().summary(), "modify src/lib.rs  +1 −1");
@@ -112,6 +141,7 @@ mod tests {
         let request = ApprovalRequest {
             tool: "shell".to_owned(),
             effect: Effect::Execute { command: "cargo test".to_owned(), risk: Risk::Normal },
+            violations: Vec::new(),
         };
         assert_eq!(request.summary(), "run `cargo test`");
     }

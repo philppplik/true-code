@@ -12,11 +12,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tc_agent::{Agent, AgentEvent, Approver, FinishReason, SessionLog};
+use tc_agent::{Agent, AgentEvent, AgentSetup, Approver, FinishReason, SessionLog};
 use tc_config::{Budget, Config};
 use tc_core::{Delta, Price, SessionId, StopReason, ToolCall, Usage};
 use tc_providers::{DeltaStream, Provider, ProviderError, Request};
-use tc_tools::{PermissionMode, ToolContext, ToolSet};
+use tc_tools::{Ledger, PermissionMode, ToolContext, ToolSet};
 use tokio::sync::mpsc;
 
 /// A provider that replays a fixed script, one entry per turn.
@@ -125,14 +125,29 @@ pub fn agent_with(
     config: &Config,
     approver: Arc<dyn Approver>,
 ) -> Agent {
+    agent_with_ledger(provider, mode, root, config, approver, Ledger::default())
+}
+
+/// Builds an agent with a specific set of project rules.
+pub fn agent_with_ledger(
+    provider: Arc<dyn Provider>,
+    mode: PermissionMode,
+    root: &std::path::Path,
+    config: &Config,
+    approver: Arc<dyn Approver>,
+    ledger: Ledger,
+) -> Agent {
     Agent::new(
-        provider,
-        ToolSet::for_mode(mode),
-        ToolContext::new(root),
+        AgentSetup {
+            provider,
+            tools: ToolSet::for_mode(mode),
+            tool_ctx: ToolContext::new(root),
+            ledger,
+            log: SessionLog::create(root, SessionId::new()),
+            approver,
+            mode,
+        },
         config,
-        SessionLog::create(root, SessionId::new()),
-        approver,
-        mode,
     )
 }
 
