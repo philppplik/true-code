@@ -45,6 +45,7 @@ const EXAMPLES: &str = "Examples:
   truecode update                          check whether a newer version exists
   truecode init                            write a starter rule file for this project
   truecode mcp                             check the MCP servers and list their tools
+  truecode hooks                           show the shell hooks this project runs
 
 First run? `truecode doctor` tells you what is missing.";
 
@@ -189,6 +190,8 @@ enum Command {
     Update,
     /// Write a starter .truecode/constraints.toml for this project.
     Init,
+    /// Show the shell hooks configured for this project.
+    Hooks,
     /// Start the configured MCP servers, list what they offer, and stop them.
     ///
     /// The way to find out whether a server works without starting a session.
@@ -241,6 +244,7 @@ pub fn run() -> anyhow::Result<()> {
         Some(Command::Learn) => print_learning(&cwd)?,
         Some(Command::Update) => remote::check_for_update(),
         Some(Command::Init) => init_project(&cwd)?,
+        Some(Command::Hooks) => print_hooks(&cwd)?,
         Some(Command::Mcp) => {
             if !print_mcp(&cwd)? {
                 std::process::exit(1);
@@ -318,6 +322,9 @@ fn start_session(
     // compile must stop the session, not be silently skipped.
     let ledger = Ledger::load(cwd)?;
     let mcp_config = tc_mcp::McpConfig::load(cwd)?;
+    // Loaded before the runtime starts: a command file that cannot be read is a
+    // setup problem, and should say so rather than going missing from /help.
+    let commands = tc_agent::commands::load(cwd)?;
 
     // One runtime for the whole session. MCP servers are child processes started
     // inside it, and they have to outlive the connect call — a runtime per entry
@@ -347,6 +354,7 @@ fn start_session(
 
             let setup = AgentSetup {
                 provider,
+                hooks: tc_agent::HookSet::load(cwd)?,
                 tools,
                 tool_ctx: ToolContext::new(cwd),
                 ledger,
@@ -362,6 +370,7 @@ fn start_session(
         let (approver, approvals) = tc_tui::approver();
         let setup = AgentSetup {
             provider,
+            hooks: tc_agent::HookSet::load(cwd)?,
             tools,
             tool_ctx: ToolContext::new(cwd),
             ledger,
@@ -373,7 +382,9 @@ fn start_session(
             // they have struggled with rather than starting from nothing each time.
             profile: tc_agent::Profile::load(cwd)?,
         };
-        tc_tui::run(Agent::new(setup, &config), &config, mode, approvals).await.map(|()| 0)
+        tc_tui::run(Agent::new(setup, &config), &config, mode, approvals, commands)
+            .await
+            .map(|()| 0)
     })
 }
 
@@ -808,6 +819,58 @@ fn print_config(config: &Config) {
         Ok(_) => println!("api key            found"),
         Err(err) => println!("api key            MISSING — {err}"),
     }
+}
+
+/// Shows the configured hooks.
+///
+/// Worth its own command for the same reason `constraints` is: these run shell
+/// commands with your privileges, from a file in the repository, and you should
+/// be able to see what they are without reading TOML.
+fn print_hooks(cwd: &Path) -> anyhow::Result<()> {
+    use tc_agent::hooks::REFUSE;
+
+    let hooks = tc_agent::HookSet::load(cwd)?;
+    if hooks.is_empty() {
+        println!(
+            "No hooks configured.
+
+             Add them to .{}/{} — for example:
+
+               [[hook]]
+               event = \"pre-tool\"      # pre-tool | post-tool | stop
+               matches = \"write_file|patch\"
+               command = \"cargo fmt --check\"",
+            tc_config::PROJECT_DIR.trim_start_matches('.'),
+            tc_agent::hooks::HOOKS_FILE
+        );
+        return Ok(());
+    }
+
+    for hook in hooks.iter() {
+        let event = match hook.event {
+            tc_agent::hooks::Event::PreTool => "pre-tool ",
+            tc_agent::hooks::Event::PostTool => "post-tool",
+            tc_agent::hooks::Event::Stop => "stop     ",
+        };
+        let scope = match (&hook.matches, hook.event) {
+            (_, tc_agent::hooks::Event::Stop) => "at the end of a run".to_owned(),
+            (Some(pattern), _) => format!("tools matching /{pattern}/"),
+            (None, _) => "every tool".to_owned(),
+        };
+        println!(
+            "  {event}  {scope}
+            $ {}",
+            hook.command
+        );
+    }
+
+    println!(
+        "
+Hooks run shell commands with your privileges, from a file in this"
+    );
+    println!("repository. A pre-tool hook exiting {REFUSE} refuses the call; any other");
+    println!("failure is reported but does not block.");
+    Ok(())
 }
 
 /// Starts the configured MCP servers, reports what they offer, and stops them.

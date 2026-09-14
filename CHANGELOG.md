@@ -10,6 +10,18 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **Project commands.** A Markdown file in `.truecode/commands/` becomes a slash
+  command, using the same frontmatter and `$ARGUMENTS` / `$1`…`$9` format as
+  Claude Code so existing files work unchanged. `/help` lists them.
+- **Hooks.** Shell commands in `.truecode/hooks.toml` run before a tool, after a
+  tool, or at the end of a run. A pre-tool hook exiting **2** refuses the call
+  and its stderr becomes the reason the model is given; any other failure is
+  reported but does not block. `truecode hooks` shows what a project would run.
+- `Agent::history()`, so tests can assert on what the model was actually told.
+
+
+### Added
+
 - **MCP client** (`tc-mcp`, on `rmcp` 3.3). Servers listed in
   `.truecode/mcp.toml` are started over stdio and their tools offered to the
   model as `mcp__<server>__<tool>`. `truecode mcp` checks the setup without

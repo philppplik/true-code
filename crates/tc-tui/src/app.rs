@@ -3,8 +3,10 @@
 //! Deliberately free of `ratatui` and `crossterm` types so that the state machine
 //! can be unit-tested without a terminal. Rendering reads this; it never owns it.
 
+use std::fmt::Write as _;
 use tc_agent::{AgentEvent, ApprovalRequest, FinishReason, PermissionMode, Proof, Question};
 use tc_config::Budget;
+
 use tc_core::{Cost, Price, Usage};
 
 /// A change waiting for the user's decision.
@@ -121,6 +123,8 @@ pub struct App {
     pub question: Option<Question>,
     /// Set once the user asked to quit.
     pub should_quit: bool,
+    /// Prompts loaded from `.truecode/commands/`.
+    pub commands: Vec<tc_agent::UserCommand>,
 }
 
 impl App {
@@ -152,6 +156,7 @@ impl App {
             scroll: 0,
             notice: None,
             should_quit: false,
+            commands: Vec::new(),
         }
     }
 
@@ -314,11 +319,23 @@ impl App {
             other if other.starts_with("/model ") => {
                 Some(Submission::Model(Some(other["/model ".len()..].trim().to_owned())))
             }
-            // An unrecognised slash command is answered locally rather than sent
-            // to the model, which would charge for a confused reply.
+            // A user command expands to a prompt. The transcript keeps what was
+            // typed, not the expansion: the short form is what they will look
+            // for when scrolling back.
             other if other.starts_with('/') => {
-                self.notice = Some(format!("Unknown command `{other}`. Try /help."));
-                None
+                let (word, arguments) =
+                    other[1..].split_once(char::is_whitespace).unwrap_or((&other[1..], ""));
+                if let Some(command) = self.commands.iter().find(|command| command.name == word) {
+                    let expanded = command.expand(arguments);
+                    self.entries.push(Entry::User(typed.clone()));
+                    Some(Submission::Prompt(expanded))
+                } else {
+                    // An unrecognised slash command is answered locally rather
+                    // than sent to the model, which would charge for a confused
+                    // reply to something that was probably a typo.
+                    self.notice = Some(format!("Unknown command `{other}`. Try /help."));
+                    None
+                }
             }
             _ => {
                 self.entries.push(Entry::User(typed.clone()));
@@ -338,7 +355,26 @@ impl App {
         self.scroll = 0;
     }
 
-    /// The text shown by `/help`.
+    /// The full help text, including any commands this project defines.
+    #[must_use]
+    pub fn help(&self) -> String {
+        if self.commands.is_empty() {
+            return Self::help_text().to_owned();
+        }
+        let mut text = format!(
+            "{}
+
+This project's commands:
+",
+            Self::help_text()
+        );
+        for command in &self.commands {
+            let _ = writeln!(text, "  {}", command.summary());
+        }
+        text
+    }
+
+    /// The built-in part of the help text.
     #[must_use]
     pub const fn help_text() -> &'static str {
         "Commands:
