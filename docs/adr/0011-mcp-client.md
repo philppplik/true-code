@@ -69,6 +69,14 @@ Also bad: MCP tool schemas are passed to the model unchanged and unbudgeted. Ten
 servers will cost real context on every request. There is no limit yet; when one
 is needed it belongs next to the tool list, not inside this crate.
 
+Verified against `@modelcontextprotocol/server-filesystem` on Windows: 14 tools,
+correctly namespaced, with no shadowing of the built-in `read_file`. Doing so
+turned up a Windows bug worth recording — Rust's `Command::new` does not apply
+`PATHEXT`, so `npx` (installed as `npx.cmd`) reported "program not found" on a
+machine where `npx --version` worked in the same terminal. `which::resolve`
+performs the lookup the shell would. For a Windows-first project that was not a
+papercut.
+
 Not covered: stdio transport only. HTTP/SSE servers, MCP resources, prompts and
 sampling are all unimplemented. Resources and prompts are the likely next step;
 sampling — letting a server ask *our* model for a completion — inverts the trust
