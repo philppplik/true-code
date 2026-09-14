@@ -23,3 +23,8 @@ Thumbs.db
 # Agent harness scratch space and per-developer tool settings
 .remember/
 .claude/settings.local.json
+
+# Per-developer configuration: which provider and model *you* use. The rules
+# (constraints.toml), the server list (mcp.toml) and the hooks are shared and
+# stay tracked — this one is personal.
+.truecode/config.toml

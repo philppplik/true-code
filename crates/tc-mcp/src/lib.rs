@@ -27,6 +27,7 @@
 
 pub mod config;
 mod tool;
+pub mod which;
 
 pub use config::{ConfigError, McpConfig, ServerConfig};
 pub use tool::{McpTool, qualified_name};
@@ -108,7 +109,9 @@ async fn start(
     name: &str,
     server: &ServerConfig,
 ) -> Result<(Arc<Connection>, Vec<Box<dyn Tool>>), String> {
-    let mut command = tokio::process::Command::new(&server.command);
+    // Resolved rather than passed through: on Windows `npx` is `npx.cmd`, and
+    // Rust does not apply PATHEXT. See `which`.
+    let mut command = tokio::process::Command::new(which::resolve(&server.command));
     command.args(&server.args);
     for (key, value) in &server.env {
         command.env(key, value);

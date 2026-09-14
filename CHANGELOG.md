@@ -8,6 +8,19 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP servers launched with `npx` or `uvx` failed on Windows.** Rust's
+  `Command::new` does not apply `PATHEXT`, so `npx` — installed as `npx.cmd` —
+  was reported as "program not found" on machines where `npx --version` worked in
+  the same terminal. The lookup is now done the way the shell would do it.
+
+### Changed
+
+- `.truecode/config.toml` is gitignored. It records which provider and model
+  *you* use; the rules, server list and hooks stay tracked and shared.
+
+
 ### Added
 
 - **Project commands.** A Markdown file in `.truecode/commands/` becomes a slash
