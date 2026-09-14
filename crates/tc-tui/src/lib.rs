@@ -161,7 +161,7 @@ async fn run_async(
                         }
                     }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        handle_key(key, &mut app, &mut run, &agent, &tx);
+                        handle_key(key, &mut app, &mut run, &agent, &tx, config);
                     }
                     Event::Paste(text) => {
                         for ch in text.chars().filter(|ch| !ch.is_control()) {
@@ -270,6 +270,7 @@ fn handle_key(
     run: &mut Option<tokio::task::JoinHandle<()>>,
     agent: &Arc<Mutex<Agent>>,
     tx: &mpsc::Sender<AgentEvent>,
+    config: &Config,
 ) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -299,6 +300,9 @@ fn handle_key(
                 tokio::spawn(handoff(agent.clone(), tx.clone()));
             }
             Some(Submission::Help) => app.note(App::help_text()),
+            Some(Submission::Model(request)) => {
+                switch_model(request.as_deref(), app, config, agent, tx);
+            }
             None => {}
         },
 
@@ -321,6 +325,63 @@ async fn undo(agent: Arc<Mutex<Agent>>, tx: mpsc::Sender<AgentEvent>) {
         Err(err) => err.to_string(),
     };
     let _ = tx.send(AgentEvent::Notice { text }).await;
+}
+
+/// Handles `/model`.
+///
+/// Resolution happens here, synchronously, so a bad id is refused with the
+/// catalogue's own error instead of being accepted and failing later as an HTTP
+/// 404 in the middle of a turn.
+fn switch_model(
+    request: Option<&str>,
+    app: &mut App,
+    config: &Config,
+    agent: &Arc<Mutex<Agent>>,
+    tx: &mpsc::Sender<AgentEvent>,
+) {
+    let Some(wanted) = request else {
+        app.note(format!(
+            "Model: {}
+Provider: {}
+
+Switch with `/model <id>` — the conversation is kept.
+             Find an id with `truecode models <search>` in another terminal.",
+            app.model, config.provider
+        ));
+        return;
+    };
+
+    let candidate = Config { model: wanted.to_owned(), ..config.clone() };
+    let info = match candidate.model_info() {
+        Ok(info) => info,
+        Err(err) => {
+            app.note(format!("{err}"));
+            return;
+        }
+    };
+    let key = match candidate.api_key() {
+        Ok(key) => key,
+        Err(err) => {
+            app.note(format!("{err}"));
+            return;
+        }
+    };
+
+    // The status bar carries the context window and price, and both change with
+    // the model. Leaving them stale would make the budget display quietly wrong.
+    app.model.clone_from(&info.id);
+    app.context_window = info.context_window;
+    let provider: Arc<dyn tc_providers::Provider> =
+        Arc::from(tc_providers::provider_for(info, key));
+    app.price = provider.price();
+
+    let agent = agent.clone();
+    let tx = tx.clone();
+    let id = app.model.clone();
+    tokio::spawn(async move {
+        agent.lock().await.set_provider(provider);
+        let _ = tx.send(AgentEvent::Notice { text: format!("Now using {id}.") }).await;
+    });
 }
 
 /// Writes a session summary and reports where it went.

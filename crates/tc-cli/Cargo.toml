@@ -8,10 +8,6 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "truecode"
-path = "src/main.rs"
-
 [dependencies]
 tc-core = { workspace = true }
 tc-agent = { workspace = true }

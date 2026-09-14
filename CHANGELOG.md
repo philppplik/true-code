@@ -8,6 +8,28 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- `-v` / `--verbose` logs true-code's own crates to stderr. `RUST_LOG` still wins.
+- `/model` in the TUI: `/model` shows what is in use, `/model <id>` switches and
+  keeps the conversation. The id is resolved before the switch, so a typo is
+  refused immediately instead of failing as a 404 mid-turn.
+- The binary installs under both `truecode` and `true-code`.
+- Provider errors now carry advice: 401/403 points at `truecode auth login`, 404
+  at `truecode models`, 402 names an empty account, 429 rate limiting, 5xx a
+  provider outage, and a 400 mentioning context is named as context overflow.
+
+### Fixed
+
+- `truecode doctor` reported a mistyped model twice — once as the model, once as
+  a missing API key — and printed an `ANTHROPIC_API_KEY` hint whatever the
+  provider was. The key is now looked up by provider, and the hint names that
+  provider's own variable.
+- `truecode config` printed the configured model string without resolving it. It
+  now shows the provider, what the id resolves to, and says when a model is not
+  in the local catalogue and therefore unverified until the first request.
+
+
 ### Fixed
 
 - **Choosing a provider in setup now works.** It writes both the provider *and* a

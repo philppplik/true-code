@@ -375,6 +375,16 @@ impl Agent {
         self.provider.id()
     }
 
+    /// Switches to a different model, keeping the conversation.
+    ///
+    /// The history is provider-neutral ([`Message`]), so a switch costs nothing
+    /// but the next request — which is the point: noticing mid-session that a
+    /// task needs a bigger model should not mean losing the context that led you
+    /// to that conclusion.
+    pub fn set_provider(&mut self, provider: std::sync::Arc<dyn Provider>) {
+        self.provider = provider;
+    }
+
     /// Context window of the model in use, in tokens.
     #[must_use]
     pub fn context_window(&self) -> u32 {
@@ -581,12 +591,12 @@ impl Agent {
         let request = Request::new(Some(self.system_prompt.clone()), self.history.clone())
             .with_tools(self.schemas.clone());
 
-        let mut stream = self.provider.stream(request).await.map_err(|err| err.to_string())?;
+        let mut stream = self.provider.stream(request).await.map_err(|err| err.explain())?;
 
         let mut turn = Turn::default();
 
         while let Some(item) = stream.next().await {
-            match item.map_err(|err| err.to_string())? {
+            match item.map_err(|err| err.explain())? {
                 Delta::Started { model } => send(events, AgentEvent::Started { model }).await,
 
                 Delta::Text { text } => {

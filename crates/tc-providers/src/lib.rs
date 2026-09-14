@@ -60,6 +60,67 @@ pub enum ProviderError {
     },
 }
 
+impl ProviderError {
+    /// What the user should do about it, when we can say something useful.
+    ///
+    /// The raw message is what the vendor said; this is what it means for the
+    /// person reading it. An HTTP status a user has to search for is a status we
+    /// failed to explain.
+    #[must_use]
+    pub fn advice(&self) -> Option<String> {
+        match self {
+            Self::Network { .. } => Some(
+                "Could not reach the provider. Check your connection, then try again — \
+                 nothing was sent, so nothing was charged."
+                    .to_owned(),
+            ),
+
+            Self::Api { provider, status, body } => match status {
+                401 | 403 => Some(format!(
+                    "Your {provider} key was rejected. Check it with `truecode auth status`, \
+                     or replace it with `truecode auth login {provider}`."
+                )),
+                404 => Some(format!(
+                    "{provider} has no such model. Find a real id with `truecode models <search>`, \
+                     then use `truecode --model <id>`."
+                )),
+                // 402 is how a gateway says "out of credit"; a generic HTTP
+                // message here sends people hunting through their own code.
+                402 => Some(format!("Your {provider} account is out of credit.")),
+                429 => Some(
+                    "Rate limited. Wait a moment, or switch to a smaller model with \
+                     `truecode --model <id>`."
+                        .to_owned(),
+                ),
+                500..=599 => Some(format!(
+                    "{provider} is having trouble on their end. This is not your setup."
+                )),
+                400 if body.contains("context") || body.contains("token") => Some(
+                    "The request was too large for this model's context window. Start a fresh \
+                     session, or pick a model with a bigger window."
+                        .to_owned(),
+                ),
+                _ => None,
+            },
+
+            Self::Decode { .. } => Some(
+                "The provider sent something true-code could not read. Re-run with --verbose \
+                 to see the raw stream, and please report it."
+                    .to_owned(),
+            ),
+        }
+    }
+
+    /// The message plus the advice, ready to show.
+    #[must_use]
+    pub fn explain(&self) -> String {
+        match self.advice() {
+            Some(advice) => format!("{self}\n\n{advice}"),
+            None => self.to_string(),
+        }
+    }
+}
+
 /// Maximum number of body bytes kept in an [`ProviderError::Api`].
 const MAX_ERROR_BODY: usize = 2_000;
 
@@ -175,6 +236,65 @@ mod tests {
         let body = "ä".repeat(MAX_ERROR_BODY);
         let truncated = truncate_body(&body);
         assert!(truncated.contains("bytes total"));
+    }
+
+    fn api_error(status: u16, body: &str) -> ProviderError {
+        ProviderError::Api { provider: "openrouter", status, body: body.to_owned() }
+    }
+
+    #[test]
+    fn a_rejected_key_says_how_to_replace_it() {
+        let advice = api_error(401, "invalid key").advice().expect("401 is explainable");
+
+        assert!(advice.contains("truecode auth login openrouter"), "unexpected: {advice}");
+    }
+
+    #[test]
+    fn a_missing_model_points_at_the_search_command() {
+        // This is the one people hit by typing a model id that looks plausible.
+        let advice = api_error(404, "no such model").advice().expect("404 is explainable");
+
+        assert!(advice.contains("truecode models"), "unexpected: {advice}");
+    }
+
+    #[test]
+    fn running_out_of_credit_is_named_as_such() {
+        // 402 sends people hunting through their own code otherwise.
+        let advice = api_error(402, "insufficient credits").advice().expect("402 is explainable");
+
+        assert!(advice.contains("out of credit"), "unexpected: {advice}");
+    }
+
+    #[test]
+    fn a_provider_outage_is_not_blamed_on_the_user() {
+        let advice = api_error(503, "upstream").advice().expect("5xx is explainable");
+
+        assert!(advice.contains("not your setup"), "unexpected: {advice}");
+    }
+
+    #[test]
+    fn a_context_overflow_is_distinguished_from_other_bad_requests() {
+        let overflow = api_error(400, "maximum context length exceeded");
+        let other = api_error(400, "unsupported parameter foo");
+
+        assert!(overflow.advice().expect("explainable").contains("context window"));
+        assert!(other.advice().is_none(), "guessing at an unknown 400 would mislead");
+    }
+
+    #[test]
+    fn explain_keeps_the_providers_own_words_and_adds_ours() {
+        // The vendor message is often the fastest route to the real cause, so it
+        // is never replaced — only accompanied.
+        let explained = api_error(401, "invalid api key").explain();
+
+        assert!(explained.contains("invalid api key"));
+        assert!(explained.contains("truecode auth"));
+    }
+
+    #[test]
+    fn an_unexplainable_error_is_shown_as_it_came() {
+        let bare = api_error(418, "teapot");
+        assert_eq!(bare.explain(), bare.to_string());
     }
 
     #[test]
