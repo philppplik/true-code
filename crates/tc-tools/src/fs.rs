@@ -66,7 +66,7 @@ impl Tool for ReadFile {
         // and teaches the model nothing.
         let Ok(text) = String::from_utf8(content) else {
             return Err(ToolError::InvalidInput {
-                tool: self.name(),
+                tool: self.name().to_owned(),
                 detail: format!("`{requested}` is not a UTF-8 text file"),
             });
         };
@@ -207,13 +207,13 @@ impl Tool for Glob {
         let pattern = required_str(&input, self.name(), "pattern")?;
 
         let glob = GlobPattern::new(&pattern).map_err(|source| ToolError::InvalidInput {
-            tool: self.name(),
+            tool: self.name().to_owned(),
             detail: format!("`{pattern}` is not a valid glob: {source}"),
         })?;
         let mut builder = GlobSetBuilder::new();
         builder.add(glob);
         let set = builder.build().map_err(|source| ToolError::InvalidInput {
-            tool: self.name(),
+            tool: self.name().to_owned(),
             detail: source.to_string(),
         })?;
 

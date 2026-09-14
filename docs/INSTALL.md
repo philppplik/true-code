@@ -173,6 +173,7 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode models <filter>` | Find a model id — live list with OpenRouter |
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode constraints` | Show the project rules in force |
+| `truecode mcp` | Check the MCP servers and list the tools they offer |
 | `truecode -v <anything>` | Log what it is doing to stderr — the first thing to try when a message alone does not explain a failure |
 | `truecode config` | Resolved configuration and where each part came from |
 
@@ -184,6 +185,52 @@ session summary · `/help` lists commands · `Ctrl+C` quits.
 task turns out to need a bigger model than you started with. The id is resolved
 before the switch, so a typo is refused there and then rather than surfacing as a
 failed request later.
+
+## Adding tools with MCP
+
+true-code can use tools from any [MCP](https://modelcontextprotocol.io) server —
+filesystem access outside the project, a database, an issue tracker, a browser.
+None of it is built in; all of it arrives this way.
+
+List the servers in `.truecode/mcp.toml`, one table each:
+
+```toml
+[servers.files]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[servers.db]
+command = "uvx"
+args = ["mcp-server-postgres"]
+env = { DATABASE_URL = "postgres://localhost/dev" }
+
+[servers.later]
+command = "whatever"
+enabled = false          # configured, not started
+```
+
+Then check it without starting a session:
+
+```bash
+truecode mcp
+```
+
+It starts each server, lists the tools it offers, names any that failed, and
+exits non-zero if one did — so it works as a CI step too.
+
+Their tools appear to the model as `mcp__<server>__<tool>`, named after *your*
+name for the server, so two servers offering a `search` tool stay apart and
+neither can shadow a built-in one.
+
+> **Every MCP tool call is shown for approval before it runs**, including ones
+> the server says are read-only. MCP's `readOnlyHint` is a hint from the server
+> about its own code, and the specification says so — it is not a guarantee, and
+> treating it as one would let any published server opt itself out of
+> confirmation. See [ADR 0011](adr/0011-mcp-client.md).
+
+Environment values in `env` are literal — there is no `${VAR}` expansion, on
+purpose. If a server needs a secret, export it in your shell before starting
+true-code, where you can see that you did it.
 
 ## Updating
 

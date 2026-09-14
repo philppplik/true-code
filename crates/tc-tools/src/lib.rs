@@ -48,7 +48,11 @@ pub enum ToolError {
     #[error("invalid arguments for `{tool}`: {detail}")]
     InvalidInput {
         /// Name of the tool that was called.
-        tool: &'static str,
+        ///
+        /// Owned rather than `&'static str`: an MCP server's tool names are only
+        /// known once it has been asked, and leaking a string per call to keep a
+        /// `'static` bound would be a leak that grows with use.
+        tool: String,
         /// What was wrong.
         detail: String,
     },
@@ -243,13 +247,13 @@ impl PermissionMode {
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync + std::fmt::Debug {
     /// Name the model calls this tool by.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// One-line description sent to the model.
     ///
     /// This is prompt text, not documentation: it is the only thing the model has
     /// when choosing between tools, and it is paid for on every request.
-    fn description(&self) -> &'static str;
+    fn description(&self) -> &str;
 
     /// JSON Schema describing the accepted arguments.
     fn input_schema(&self) -> serde_json::Value;
@@ -327,6 +331,22 @@ impl ToolSet {
         Self::new(tools)
     }
 
+    /// Adds tools from outside this crate, e.g. an MCP server.
+    ///
+    /// Appended rather than merged by name: a foreign tool must not be able to
+    /// take the place of a built-in one. The MCP namespace (`mcp__…`) already
+    /// makes a collision impossible, and appending keeps it that way without
+    /// this code needing to know the naming rule.
+    pub fn extend(&mut self, tools: Vec<Box<dyn Tool>>) {
+        self.tools.extend(tools);
+    }
+
+    /// Every tool in the set, in the order the model is shown them.
+    #[must_use]
+    pub fn names(&self) -> Vec<&str> {
+        self.tools.iter().map(|tool| tool.name()).collect()
+    }
+
     /// Previews a named tool call.
     pub async fn preview(
         &self,
@@ -368,14 +388,10 @@ impl ToolSet {
 }
 
 /// Extracts a required string argument.
-fn required_str(
-    input: &serde_json::Value,
-    tool: &'static str,
-    key: &str,
-) -> Result<String, ToolError> {
+fn required_str(input: &serde_json::Value, tool: &str, key: &str) -> Result<String, ToolError> {
     input.get(key).and_then(serde_json::Value::as_str).map(str::to_owned).ok_or_else(|| {
         ToolError::InvalidInput {
-            tool,
+            tool: tool.to_owned(),
             detail: format!("missing required string argument `{key}`"),
         }
     })

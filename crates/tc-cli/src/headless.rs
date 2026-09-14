@@ -17,13 +17,7 @@ use tokio::sync::mpsc;
 pub const EXIT_INCOMPLETE: i32 = 2;
 
 /// Runs a single prompt and prints the answer. Returns the process exit code.
-pub fn run(agent: Agent, prompt: &str) -> anyhow::Result<i32> {
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run_async(agent, prompt))
-}
-
-/// Async body of [`run`].
-async fn run_async(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
+pub async fn run(mut agent: Agent, prompt: &str) -> anyhow::Result<i32> {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
 
     // The agent runs in its own task so that printing can keep pace with the

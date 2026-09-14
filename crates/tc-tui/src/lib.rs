@@ -77,18 +77,7 @@ pub fn approver() -> (Arc<TuiApprover>, mpsc::Receiver<ApprovalMessage>) {
 }
 
 /// Runs the interactive TUI until the user quits.
-pub fn run(
-    agent: Agent,
-    config: &Config,
-    mode: PermissionMode,
-    approvals: mpsc::Receiver<ApprovalMessage>,
-) -> anyhow::Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run_async(agent, config, mode, approvals))
-}
-
-/// Async body of [`run`], kept separate so the terminal guard has a clear scope.
-async fn run_async(
+pub async fn run(
     agent: Agent,
     config: &Config,
     mode: PermissionMode,
