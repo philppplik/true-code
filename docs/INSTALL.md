@@ -174,6 +174,7 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode constraints` | Show the project rules in force |
 | `truecode mcp` | Check the MCP servers and list the tools they offer |
+| `truecode hooks` | Show the shell hooks this project runs |
 | `truecode -v <anything>` | Log what it is doing to stderr — the first thing to try when a message alone does not explain a failure |
 | `truecode config` | Resolved configuration and where each part came from |
 
@@ -185,6 +186,100 @@ session summary · `/help` lists commands · `Ctrl+C` quits.
 task turns out to need a bigger model than you started with. The id is resolved
 before the switch, so a typo is refused there and then rather than surfacing as a
 failed request later.
+
+## Your own commands
+
+A Markdown file in `.truecode/commands/` becomes a slash command. The file name
+is the command name; the body is the prompt.
+
+`.truecode/commands/review.md`:
+
+```markdown
+---
+description: Review the staged diff
+argument-hint: [focus area]
+---
+Run `git diff --staged`, then review it for $ARGUMENTS.
+Say what you actually checked and what you did not.
+```
+
+Then `/review error handling` in a session. `$ARGUMENTS` is everything typed
+after the name; `$1`…`$9` are the individual words. A body with no placeholder
+gets the arguments appended on their own line, so nothing you type is lost.
+`/help` lists your project's commands alongside the built-in ones.
+
+This is the same format Claude Code uses, on purpose — existing command files
+work here without being rewritten. Frontmatter keys true-code does not know are
+ignored rather than refused.
+
+Commands are text substitution and nothing more: no shell execution, no file
+inclusion. A prompt file that could run commands is one a pull request could
+turn into a backdoor.
+
+## Hooks
+
+Shell commands run around tool calls, in `.truecode/hooks.toml`:
+
+```toml
+[[hook]]
+event = "pre-tool"              # pre-tool | post-tool | stop
+matches = "write_file|patch"    # regex on the tool name; omit for every tool
+command = "test -z \"$(git status --porcelain)\" || exit 2"
+
+[[hook]]
+event = "post-tool"
+matches = "write_file|patch"
+command = "cargo fmt"
+
+[[hook]]
+event = "stop"                  # once, when the run ends
+command = "cargo test -q"
+```
+
+```bash
+truecode hooks
+```
+
+**A pre-tool hook can refuse.** Exit **2** blocks the tool call and the hook's
+stderr becomes the reason the model is told — so it can correct itself rather
+than guess. **Any other non-zero exit is reported but does not block**, because a
+lint command that is not installed should not make the agent unusable.
+
+Post-tool hooks run only after a tool succeeded, and their output goes to the
+model. Stop hooks run before the proof panel, so a hook that runs the tests
+becomes part of the evidence.
+
+Each hook is given 60 seconds, then killed.
+
+> **Hooks are not a security boundary.** They run shell commands with your full
+> privileges, from a file in the repository. Anyone who can land a commit can run
+> a command on your next session — the same trust model as a `Makefile` or a git
+> hook. Use `truecode hooks` to see what a project would run before you start a
+> session in it.
+
+## Using true-code in CI
+
+The headless flag takes a prompt and prints the answer on stdout:
+
+```bash
+truecode -p "summarise what changed in this PR" > review.md
+```
+
+Check the setup first — both commands exit non-zero when something is wrong, so
+a workflow fails before it spends tokens:
+
+```yaml
+- run: truecode doctor
+- run: truecode mcp          # only if the project configures servers
+- run: truecode -p "review the staged diff" > review.md
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+In CI use the environment variable, not the keyring — there is no logged-in
+session for a keyring to belong to. `-p` **refuses every change by default**,
+because there is nobody to ask; `--yes` approves them, and is the one flag worth
+thinking twice about before putting in a workflow.
 
 ## Adding tools with MCP
 
