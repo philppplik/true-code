@@ -82,6 +82,7 @@ pub async fn run(
     config: &Config,
     mode: PermissionMode,
     mut approvals: mpsc::Receiver<ApprovalMessage>,
+    commands: Vec<tc_agent::UserCommand>,
 ) -> anyhow::Result<()> {
     let mut app = App::new(
         agent.model_id().to_owned(),
@@ -91,6 +92,7 @@ pub async fn run(
         mode,
         agent.rule_count(),
     );
+    app.commands = commands;
 
     let agent = Arc::new(Mutex::new(agent));
     let mut terminal = TerminalGuard::enter()?;
@@ -288,7 +290,7 @@ fn handle_key(
             Some(Submission::Handoff) => {
                 tokio::spawn(handoff(agent.clone(), tx.clone()));
             }
-            Some(Submission::Help) => app.note(App::help_text()),
+            Some(Submission::Help) => app.note(app.help()),
             Some(Submission::Model(request)) => {
                 switch_model(request.as_deref(), app, config, agent, tx);
             }

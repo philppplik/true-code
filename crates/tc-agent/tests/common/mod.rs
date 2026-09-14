@@ -139,6 +139,7 @@ pub fn agent_with_learning(
 ) -> Agent {
     Agent::new(
         AgentSetup {
+            hooks: tc_agent::HookSet::default(),
             provider,
             tools: ToolSet::for_mode(mode),
             tool_ctx: ToolContext::new(root),
@@ -164,6 +165,7 @@ pub fn agent_with_ledger(
 ) -> Agent {
     Agent::new(
         AgentSetup {
+            hooks: tc_agent::HookSet::default(),
             provider,
             tools: ToolSet::for_mode(mode),
             tool_ctx: ToolContext::new(root),

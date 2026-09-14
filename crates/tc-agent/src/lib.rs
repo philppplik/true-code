@@ -26,12 +26,16 @@
 
 pub mod approval;
 pub mod checkpoint;
+pub mod commands;
+pub mod hooks;
 pub mod learn;
 pub mod proof;
 pub mod session;
 
 pub use approval::{ApprovalRequest, Approver, Decision, DenyAll};
 pub use checkpoint::UndoError;
+pub use commands::{CommandError, UserCommand};
+pub use hooks::{HookError, HookSet};
 pub use learn::{Profile, Question};
 pub use proof::{Proof, Verdict};
 pub use tc_tools::{Effect, Ledger, PermissionMode, Risk, Violation};
@@ -248,6 +252,7 @@ pub enum AgentEvent {
 #[derive(Debug)]
 pub struct Agent {
     provider: std::sync::Arc<dyn Provider>,
+    hooks: hooks::HookSet,
     tools: ToolSet,
     tool_ctx: ToolContext,
     schemas: Vec<ToolSchema>,
@@ -282,6 +287,8 @@ pub struct Agent {
 pub struct AgentSetup {
     /// Where model turns come from.
     pub provider: std::sync::Arc<dyn Provider>,
+    /// Shell commands run around tool calls and at the end of a run.
+    pub hooks: hooks::HookSet,
     /// What the agent may call.
     pub tools: ToolSet,
     /// Which directory it may touch.
@@ -309,6 +316,7 @@ impl Agent {
     pub fn new(setup: AgentSetup, config: &Config) -> Self {
         let AgentSetup {
             provider,
+            hooks,
             tools,
             tool_ctx,
             ledger,
@@ -331,6 +339,7 @@ impl Agent {
 
         let mut agent = Self {
             provider,
+            hooks,
             tools,
             tool_ctx,
             schemas,
@@ -383,6 +392,15 @@ impl Agent {
     /// to that conclusion.
     pub fn set_provider(&mut self, provider: std::sync::Arc<dyn Provider>) {
         self.provider = provider;
+    }
+
+    /// The conversation as the model sees it.
+    ///
+    /// Exposed so tests can assert on what the model was actually told, which is
+    /// the only thing that determines what it does next.
+    #[must_use]
+    pub fn history(&self) -> &[Message] {
+        &self.history
     }
 
     /// Context window of the model in use, in tokens.
@@ -576,6 +594,14 @@ impl Agent {
     /// "it stopped" read as "it worked", which is the whole failure this guards
     /// against.
     async fn finish(&mut self, events: &mpsc::Sender<AgentEvent>, reason: FinishReason) {
+        // Before the proof panel, so a stop hook that runs the tests can still
+        // be the evidence the panel reports rather than a footnote after it.
+        for outcome in self.hooks.run(hooks::Event::Stop, "", self.tool_ctx.root()).await {
+            if let hooks::Outcome::Failed(detail) | hooks::Outcome::Refused(detail) = outcome {
+                send(events, AgentEvent::Notice { text: detail }).await;
+            }
+        }
+
         if !self.proof.is_empty() {
             send(events, AgentEvent::Proven { proof: self.proof.clone() }).await;
         }
@@ -631,6 +657,23 @@ impl Agent {
         call: &tc_core::ToolCall,
         events: &mpsc::Sender<AgentEvent>,
     ) -> Gate {
+        // Before the preview: a hook that refuses should cost nothing, and a
+        // preview can touch the filesystem.
+        for outcome in self.hooks.run(hooks::Event::PreTool, &call.name, self.tool_ctx.root()).await
+        {
+            match outcome {
+                hooks::Outcome::Refused(reason) => {
+                    return Gate::Failed(format!("refused before it ran: {reason}"));
+                }
+                // A broken hook is reported to the user but does not block: the
+                // agent must stay usable when someone's lint command is missing.
+                hooks::Outcome::Failed(detail) => {
+                    send(events, AgentEvent::Notice { text: detail }).await;
+                }
+                hooks::Outcome::Passed => {}
+            }
+        }
+
         let effect = match self.tools.preview(&call.name, call.input.clone(), &self.tool_ctx).await
         {
             Ok(effect) => effect,
@@ -868,6 +911,25 @@ impl Agent {
                 Ok(output) => (output, false),
                 Err(err) => (err.to_string(), true),
             };
+
+            if !is_error {
+                for hook in
+                    self.hooks.run(hooks::Event::PostTool, &call.name, self.tool_ctx.root()).await
+                {
+                    // A post-tool hook cannot refuse anything — the tool has
+                    // already run. Its findings go to the model, which is the
+                    // only party that can act on them.
+                    if let hooks::Outcome::Failed(detail) | hooks::Outcome::Refused(detail) = hook {
+                        let _ = write!(
+                            output,
+                            "
+
+{detail}"
+                        );
+                        send(events, AgentEvent::Notice { text: detail }).await;
+                    }
+                }
+            }
 
             // The model is told when a change it made broke a stated rule, even
             // though the user allowed it. Otherwise it reads the approval as
