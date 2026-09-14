@@ -176,7 +176,7 @@ impl Patch {
 
         if old.is_empty() {
             return Err(ToolError::InvalidInput {
-                tool: self.name(),
+                tool: self.name().to_owned(),
                 detail: "`old_string` must not be empty — use write_file to create a file"
                     .to_owned(),
             });
@@ -188,7 +188,7 @@ impl Patch {
         // reads this and has to be able to fix its own call from it.
         if matches == 0 {
             return Err(ToolError::InvalidInput {
-                tool: self.name(),
+                tool: self.name().to_owned(),
                 detail: format!(
                     "`old_string` does not appear in {requested}. It must match character for \
                      character, including indentation and line breaks. Read the file first."
@@ -197,7 +197,7 @@ impl Patch {
         }
         if matches > 1 && !replace_all {
             return Err(ToolError::InvalidInput {
-                tool: self.name(),
+                tool: self.name().to_owned(),
                 detail: format!(
                     "`old_string` appears {matches} times in {requested}. Add surrounding lines \
                      until it is unique, or set replace_all to change all of them."
@@ -224,7 +224,7 @@ fn read_existing(path: &std::path::Path, requested: &str) -> Result<Option<Strin
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(ToolError::Io { operation: "read", path: requested.to_owned(), source }),
         Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| ToolError::InvalidInput {
-            tool: "write_file",
+            tool: "write_file".to_owned(),
             detail: format!("`{requested}` is not a UTF-8 text file and will not be overwritten"),
         }),
     }

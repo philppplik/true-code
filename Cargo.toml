@@ -5,6 +5,7 @@ members = [
     "crates/tc-config",
     "crates/tc-providers",
     "crates/tc-tools",
+    "crates/tc-mcp",
     "crates/tc-agent",
     "crates/tc-tui",
     "crates/tc-cli",
@@ -25,8 +26,15 @@ tc-core = { path = "crates/tc-core", version = "0.1.0" }
 tc-config = { path = "crates/tc-config", version = "0.1.0" }
 tc-providers = { path = "crates/tc-providers", version = "0.1.0" }
 tc-tools = { path = "crates/tc-tools", version = "0.1.0" }
+tc-mcp = { path = "crates/tc-mcp", version = "0.1.0" }
 tc-agent = { path = "crates/tc-agent", version = "0.1.0" }
 tc-tui = { path = "crates/tc-tui", version = "0.1.0" }
+
+# MCP. Client only: true-code talks to other people's servers, it is not one.
+rmcp = { version = "3.3", default-features = false, features = [
+    "client",
+    "transport-child-process",
+] }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }

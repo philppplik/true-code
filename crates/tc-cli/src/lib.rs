@@ -44,6 +44,7 @@ const EXAMPLES: &str = "Examples:
   truecode models llama                    find a model id (live, with OpenRouter)
   truecode update                          check whether a newer version exists
   truecode init                            write a starter rule file for this project
+  truecode mcp                             check the MCP servers and list their tools
 
 First run? `truecode doctor` tells you what is missing.";
 
@@ -188,6 +189,10 @@ enum Command {
     Update,
     /// Write a starter .truecode/constraints.toml for this project.
     Init,
+    /// Start the configured MCP servers, list what they offer, and stop them.
+    ///
+    /// The way to find out whether a server works without starting a session.
+    Mcp,
     /// Store, check or remove an API key.
     Auth {
         #[command(subcommand)]
@@ -236,6 +241,11 @@ pub fn run() -> anyhow::Result<()> {
         Some(Command::Learn) => print_learning(&cwd)?,
         Some(Command::Update) => remote::check_for_update(),
         Some(Command::Init) => init_project(&cwd)?,
+        Some(Command::Mcp) => {
+            if !print_mcp(&cwd)? {
+                std::process::exit(1);
+            }
+        }
         Some(Command::Verify) => {
             if !verify(&cwd)? {
                 std::process::exit(1);
@@ -301,19 +311,55 @@ fn start_session(
     let provider: Arc<dyn tc_providers::Provider> =
         Arc::from(tc_providers::provider_for(info, api_key));
 
-    let tools = ToolSet::for_mode(mode);
+    let mut tools = ToolSet::for_mode(mode);
     let log = SessionLog::create(cwd, SessionId::new());
 
     // Loaded before anything runs: a rule the user wrote down but that does not
     // compile must stop the session, not be silently skipped.
     let ledger = Ledger::load(cwd)?;
+    let mcp_config = tc_mcp::McpConfig::load(cwd)?;
 
-    if let Some(prompt) = prompt {
-        // Nobody is watching a headless run, so the choice is between an explicit
-        // opt-in and refusing. It is never "apply and hope".
-        let approver: Arc<dyn Approver> =
-            if auto_approve { Arc::new(ApproveAll) } else { Arc::new(DenyAll) };
+    // One runtime for the whole session. MCP servers are child processes started
+    // inside it, and they have to outlive the connect call — a runtime per entry
+    // point would kill them the moment setup finished.
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    runtime.block_on(async move {
+        let mcp = tc_mcp::connect(&mcp_config).await;
+        for failure in &mcp.failures {
+            // stderr, not the transcript: it is a setup problem, and a headless
+            // run's stdout belongs to the answer.
+            eprintln!("warning: {failure}");
+        }
+        if !mcp.tools.is_empty() {
+            eprintln!(
+                "{} tool(s) from {} MCP server(s). Each call is shown before it runs.",
+                mcp.tools.len(),
+                mcp.server_count()
+            );
+        }
+        tools.extend(mcp.tools);
 
+        if let Some(prompt) = prompt {
+            // Nobody is watching a headless run, so the choice is between an explicit
+            // opt-in and refusing. It is never "apply and hope".
+            let approver: Arc<dyn Approver> =
+                if auto_approve { Arc::new(ApproveAll) } else { Arc::new(DenyAll) };
+
+            let setup = AgentSetup {
+                provider,
+                tools,
+                tool_ctx: ToolContext::new(cwd),
+                ledger,
+                log,
+                approver,
+                mode,
+                teaching: false,
+                profile: tc_agent::Profile::default(),
+            };
+            return headless::run(Agent::new(setup, &config), &prompt).await;
+        }
+
+        let (approver, approvals) = tc_tui::approver();
         let setup = AgentSetup {
             provider,
             tools,
@@ -322,27 +368,13 @@ fn start_session(
             log,
             approver,
             mode,
-            teaching: false,
-            profile: tc_agent::Profile::default(),
+            teaching,
+            // What this person has met before, so the question can prefer something
+            // they have struggled with rather than starting from nothing each time.
+            profile: tc_agent::Profile::load(cwd)?,
         };
-        return headless::run(Agent::new(setup, &config), &prompt);
-    }
-
-    let (approver, approvals) = tc_tui::approver();
-    let setup = AgentSetup {
-        provider,
-        tools,
-        tool_ctx: ToolContext::new(cwd),
-        ledger,
-        log,
-        approver,
-        mode,
-        teaching,
-        // What this person has met before, so the question can prefer something
-        // they have struggled with rather than starting from nothing each time.
-        profile: tc_agent::Profile::load(cwd)?,
-    };
-    tc_tui::run(Agent::new(setup, &config), &config, mode, approvals).map(|()| 0)
+        tc_tui::run(Agent::new(setup, &config), &config, mode, approvals).await.map(|()| 0)
+    })
 }
 
 /// Reverts the most recent change recorded in this project.
@@ -776,6 +808,66 @@ fn print_config(config: &Config) {
         Ok(_) => println!("api key            found"),
         Err(err) => println!("api key            MISSING — {err}"),
     }
+}
+
+/// Starts the configured MCP servers, reports what they offer, and stops them.
+///
+/// Returns false if any configured server failed, so a setup check can be a CI
+/// step rather than something a human has to read.
+fn print_mcp(cwd: &Path) -> anyhow::Result<bool> {
+    let config = tc_mcp::McpConfig::load(cwd)?;
+    if config.servers.is_empty() {
+        println!(
+            "No MCP servers configured.
+
+             Add them to .{}/{} — one table per server:
+
+               [servers.files]
+               command = \"npx\"
+               args = [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]",
+            tc_config::PROJECT_DIR.trim_start_matches('.'),
+            tc_mcp::config::MCP_FILE
+        );
+        return Ok(true);
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let result = runtime.block_on(tc_mcp::connect(&config));
+
+    for (name, server) in config.enabled() {
+        let tools: Vec<&str> = result
+            .tools
+            .iter()
+            .map(|tool| tool.name())
+            .filter(|id| id.starts_with(&format!("mcp__{name}__")))
+            .collect();
+
+        if let Some(failure) = result.failures.iter().find(|failure| &failure.server == name) {
+            println!("  FAIL  {name}  {}", failure.detail);
+        } else {
+            println!("  ok    {name}  {} ({} tool(s))", server.command, tools.len());
+            for tool in tools {
+                println!("          {tool}");
+            }
+        }
+    }
+
+    let disabled = config.servers.len() - config.enabled().count();
+    if disabled > 0 {
+        println!(
+            "
+{disabled} server(s) configured but disabled."
+        );
+    }
+    // Said once, here, rather than implied: people choose servers based on what
+    // they can do, and need to know what that costs them in confirmations.
+    println!(
+        "
+Every MCP tool call is shown for approval before it runs — the"
+    );
+    println!("protocol's read-only annotation is a hint from the server, not a guarantee.");
+
+    Ok(result.failures.is_empty())
 }
 
 /// Initialises logging.

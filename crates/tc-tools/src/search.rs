@@ -72,7 +72,7 @@ impl Tool for Grep {
             .size_limit(1 << 20)
             .build()
             .map_err(|source| ToolError::InvalidInput {
-                tool: self.name(),
+                tool: self.name().to_owned(),
                 detail: format!("`{pattern}` is not a valid regular expression: {source}"),
             })?;
 

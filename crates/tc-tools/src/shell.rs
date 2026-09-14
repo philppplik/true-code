@@ -118,7 +118,7 @@ impl Tool for Shell {
                 // The child is killed by dropping it; tokio's `kill_on_drop` makes
                 // that reliable rather than leaving an orphan running.
                 return Err(ToolError::InvalidInput {
-                    tool: self.name(),
+                    tool: self.name().to_owned(),
                     detail: format!(
                         "`{command}` did not finish within {} seconds and was killed. If it \
                          waits for input, add a non-interactive flag.",
@@ -138,7 +138,7 @@ fn refuse_if_catastrophic(command: &str) -> Result<(), ToolError> {
     for (pattern, reason) in REFUSED {
         if lowered.contains(pattern) {
             return Err(ToolError::InvalidInput {
-                tool: "shell",
+                tool: "shell".to_owned(),
                 detail: format!(
                     "Refused: `{pattern}` {reason}. true-code will not run this even with \
                      approval. Run it yourself if you are sure."

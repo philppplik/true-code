@@ -10,6 +10,23 @@ While the version is `0.x`, breaking changes can land in a minor release.
 
 ### Added
 
+- **MCP client** (`tc-mcp`, on `rmcp` 3.3). Servers listed in
+  `.truecode/mcp.toml` are started over stdio and their tools offered to the
+  model as `mcp__<server>__<tool>`. `truecode mcp` checks the setup without
+  starting a session and exits non-zero if a server failed.
+- Every MCP tool call is confirmed before it runs, whatever the server's
+  `readOnlyHint` claims — see ADR 0011.
+- A server that will not start is reported and skipped; the rest of the session
+  keeps the tools from the servers that did.
+
+### Changed
+
+- `Tool::name` and `Tool::description` return `&str` rather than `&'static str`,
+  so a tool whose name is only known at runtime needs no leak.
+
+
+### Added
+
 - `-v` / `--verbose` logs true-code's own crates to stderr. `RUST_LOG` still wins.
 - `/model` in the TUI: `/model` shows what is in use, `/model <id>` switches and
   keeps the conversation. The id is resolved before the switch, so a typo is
