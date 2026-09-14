@@ -69,6 +69,8 @@ pub enum Submission {
     Handoff,
     /// Show the available commands.
     Help,
+    /// Switch model, or list the candidates when no id was given.
+    Model(Option<String>),
 }
 
 /// What the app is currently doing.
@@ -305,6 +307,13 @@ impl App {
             "/undo" => Some(Submission::Undo),
             "/handoff" => Some(Submission::Handoff),
             "/help" => Some(Submission::Help),
+            "/model" => Some(Submission::Model(None)),
+            // `/model <id>` rather than a picker modal: the ids that matter are
+            // gateway ids this build has never heard of, so any list we rendered
+            // would be a subset of what actually works.
+            other if other.starts_with("/model ") => {
+                Some(Submission::Model(Some(other["/model ".len()..].trim().to_owned())))
+            }
             // An unrecognised slash command is answered locally rather than sent
             // to the model, which would charge for a confused reply.
             other if other.starts_with('/') => {
@@ -335,6 +344,7 @@ impl App {
         "Commands:
   /undo      revert the last change true-code made
   /handoff   write a summary of this session to a file
+  /model     show the current model; /model <id> switches, keeping the conversation
   /help      this list
 
          Keys: Enter send · Esc abort the running turn · Ctrl+C quit · PgUp/PgDn scroll.
@@ -617,6 +627,22 @@ mod tests {
     }
 
     #[test]
+    fn slash_model_carries_the_id_when_one_was_typed() {
+        let mut app = test_app();
+        app.input = "/model openai/gpt-4.1-mini".to_owned();
+
+        assert_eq!(app.submit(), Some(Submission::Model(Some("openai/gpt-4.1-mini".to_owned()))));
+    }
+
+    #[test]
+    fn a_bare_slash_model_asks_rather_than_guessing_an_id() {
+        let mut app = test_app();
+        app.input = "/model".to_owned();
+
+        assert_eq!(app.submit(), Some(Submission::Model(None)));
+    }
+
+    #[test]
     fn slash_undo_is_handled_locally_rather_than_sent_to_the_model() {
         let mut app = test_app();
         app.input = "/undo".to_owned();
@@ -681,7 +707,7 @@ mod tests {
 
     #[test]
     fn the_help_text_lists_every_command_submit_accepts() {
-        for command in ["/undo", "/handoff", "/help"] {
+        for command in ["/undo", "/handoff", "/help", "/model"] {
             assert!(App::help_text().contains(command), "`{command}` is undocumented");
         }
     }

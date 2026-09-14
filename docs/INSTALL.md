@@ -1,7 +1,8 @@
 # Installing true-code
 
-The command is **`truecode`** (no hyphen). The project is called true-code; the
-thing you type is `truecode`.
+The command is **`truecode`**. `true-code` works too — both names are installed,
+because the project is called true-code and typing the hyphen is the mistake
+everyone makes once.
 
 There is no installer yet — no `scoop`, no `brew`, no prebuilt binaries. That is
 on the roadmap (phase P5) and deliberately not yet done: shipping signed binaries
@@ -172,11 +173,17 @@ Commands: `truecode --help` lists everything. The ones worth knowing early:
 | `truecode models <filter>` | Find a model id — live list with OpenRouter |
 | `truecode models` | Known models, context windows, assumed prices |
 | `truecode constraints` | Show the project rules in force |
+| `truecode -v <anything>` | Log what it is doing to stderr — the first thing to try when a message alone does not explain a failure |
 | `truecode config` | Resolved configuration and where each part came from |
 
 Inside a session: `Enter` sends · `Esc` aborts the running turn · `/undo` reverts
-the last change · `/handoff` writes a session summary · `/help` lists commands ·
-`Ctrl+C` quits.
+the last change · `/model` shows or switches the model · `/handoff` writes a
+session summary · `/help` lists commands · `Ctrl+C` quits.
+
+`/model <id>` switches mid-session and **keeps the conversation** — useful when a
+task turns out to need a bigger model than you started with. The id is resolved
+before the switch, so a typo is refused there and then rather than surfacing as a
+failed request later.
 
 ## Updating
 
@@ -213,6 +220,12 @@ Windows a variable set with `$env:` only lasts for that terminal window.
 
 **`the system keyring is unavailable`** — usual on a headless Linux box with no
 Secret Service running. Use the environment variable instead.
+
+**An HTTP error from the provider** — true-code says what the status means and
+what to do: a 401 points at `truecode auth login`, a 404 at `truecode models`, a
+402 says the account is out of credit, and a 5xx says plainly that it is not your
+setup. The provider's own message is kept above ours, because it is often the
+faster route to the cause.
 
 **`error: package requires rustc 1.88`** — `rustup update`.
 

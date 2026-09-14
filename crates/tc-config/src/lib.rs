@@ -185,12 +185,15 @@ impl Config {
         })
     }
 
-    /// Reads the API key for the configured model's provider.
+    /// Reads the API key for the configured provider.
     ///
     /// Environment first, then the OS keyring. Never a file true-code wrote.
+    ///
+    /// Keyed off the provider rather than the resolved model on purpose: a
+    /// mistyped model id must not also be reported as a missing key, or one
+    /// mistake turns into two failures pointing in different directions.
     pub fn api_key(&self) -> Result<String, ConfigError> {
-        let info = self.model_info()?;
-        Ok(secrets::key_for(info.vendor)?.0)
+        Ok(secrets::key_for(self.vendor()?)?.0)
     }
 }
 

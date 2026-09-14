@@ -1,4 +1,4 @@
-//! The `truecode` binary.
+//! The true-code CLI.
 //!
 //! Three entry points, one engine:
 //!
@@ -143,6 +143,13 @@ struct Cli {
     #[arg(long)]
     learn: bool,
 
+    /// Log what true-code is doing to stderr.
+    ///
+    /// The first thing to reach for when something fails and the message alone
+    /// does not explain it. `RUST_LOG` still wins if it is set.
+    #[arg(short = 'v', long, global = true)]
+    verbose: bool,
+
     /// Approve every change without asking. Headless mode only.
     ///
     /// Without it, `-p` refuses changes, because there is nobody to ask.
@@ -205,10 +212,11 @@ enum AuthAction {
     },
 }
 
-fn main() -> anyhow::Result<()> {
-    init_tracing();
-
+/// Runs the CLI. Both binaries are one line calling this.
+pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
+
     let cwd = match cli.directory {
         Some(dir) => dir,
         None => std::env::current_dir().context("cannot determine the current directory")?,
@@ -597,20 +605,43 @@ fn doctor(config: &Config, cwd: &Path) -> bool {
     };
 
     check(
+        "provider",
+        config.vendor().map(|vendor| vendor.name.to_owned()).map_err(|err| {
+            format!(
+                "{err}
+        set `provider` in .truecode/config.toml"
+            )
+        }),
+    );
+
+    check(
         "model",
         config
             .model_info()
-            .map(|info| format!("{} ({} token context)", info.id, info.context_window))
-            .map_err(|err| err.to_string()),
+            .map(|info| match info.price {
+                Some(_) => format!("{} ({} token context)", info.id, info.context_window),
+                // A passthrough provider accepts any id, so resolving proves
+                // nothing about whether the model exists. Saying so here is the
+                // difference between a clear failure now and a 404 mid-session.
+                None => format!("{} (not in the local catalogue — unverified)", info.id),
+            })
+            .map_err(|err| {
+                format!(
+                    "{err}
+        find one: truecode models <search>"
+                )
+            }),
     );
 
     check(
         "api key",
-        config.api_key().map(|_| "found in the environment".to_owned()).map_err(|err| {
-            format!(
-                "{err}
-        PowerShell: $env:ANTHROPIC_API_KEY = \"sk-...\""
-            )
+        config.vendor().map_err(|err| err.to_string()).and_then(|vendor| {
+            tc_config::secrets::key_for(vendor)
+                .map(|(_, source)| format!("found in the {}", source.label()))
+                // Naming the provider's own variable matters: a hardcoded
+                // ANTHROPIC_API_KEY hint sends an OpenRouter user to set a key
+                // that will never be read.
+                .map_err(|err| err.to_string())
         }),
     );
 
@@ -712,7 +743,23 @@ fn print_models(config: &Config, filter: Option<&str>) -> anyhow::Result<()> {
 
 /// Prints the resolved configuration.
 fn print_config(config: &Config) {
-    println!("model              {}", config.model);
+    // Both the raw setting and what it resolves to. Printing only the raw value
+    // hides the step that actually goes wrong, and printing only the resolved
+    // one hides where to edit it.
+    println!("provider           {}", config.provider);
+    match config.model_info() {
+        Ok(info) => {
+            println!(
+                "model              {} -> {} ({})",
+                config.model, info.api_model, info.vendor.name
+            );
+            if info.price.is_none() {
+                println!("                   not in the local catalogue — sent as-is.");
+                println!("                   A typo here surfaces as a 404 on the first request.");
+            }
+        }
+        Err(err) => println!("model              {} — UNRESOLVED: {err}", config.model),
+    }
     println!("budget (session)   ${:.2}", config.budget.session_limit_usd);
     println!("warn at            {} %", config.budget.warn_at_percent);
     println!(
@@ -735,10 +782,17 @@ fn print_config(config: &Config) {
 ///
 /// Logs go to stderr so that `truecode -p "…" > answer.md` stays pipeable, and
 /// are silent unless `RUST_LOG` asks for them.
-fn init_tracing() {
+fn init_tracing(verbose: bool) {
     use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    // `--verbose` raises our own crates only: turning on debug for every
+    // dependency buries the three lines that matter under reqwest's internals.
+    let fallback = if verbose {
+        "warn,truecode=debug,tc_agent=debug,tc_providers=debug,tc_tools=debug,tc_config=debug"
+    } else {
+        "warn"
+    };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(fallback));
     fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
