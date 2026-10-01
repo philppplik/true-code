@@ -51,7 +51,7 @@ jobs:
       # The MCP acceptance test drives a Python stdio server. It skips itself
       # when no interpreter is present, so pinning one here is what stops the
       # test from quietly not running.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
       - name: Build
