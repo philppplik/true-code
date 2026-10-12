@@ -593,7 +593,7 @@ mod tests {
         let mut app = test_app();
         app.input = "   ".to_owned();
         assert!(app.submit().is_none());
-        assert!(app.entries.is_empty());
+        assert_eq!(app.entries, [] as [Entry; 0]);
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
             app.insert_char(ch);
         }
         assert_eq!(app.submit(), Some(Submission::Prompt("hi".to_owned())));
-        assert!(app.input.is_empty());
+        assert_eq!(app.input, "");
         assert_eq!(app.entries[0], Entry::User("hi".to_owned()));
     }
 
@@ -651,7 +651,7 @@ mod tests {
     fn backspace_on_empty_input_is_a_no_op() {
         let mut app = test_app();
         app.backspace();
-        assert!(app.input.is_empty());
+        assert_eq!(app.input, "");
         assert_eq!(app.cursor, 0);
     }
 
