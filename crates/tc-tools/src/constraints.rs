@@ -446,7 +446,7 @@ mod tests {
         );
 
         assert_eq!(ledger.check_command("cargo publish --dry-run").len(), 1);
-        assert!(ledger.check_command("cargo test").is_empty());
+        assert_eq!(ledger.check_command("cargo test"), [] as [Violation; 0]);
     }
 
     #[test]

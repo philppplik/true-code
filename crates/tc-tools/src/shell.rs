@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn every_refused_pattern_has_a_stated_reason() {
         for (pattern, reason) in REFUSED {
-            assert!(!pattern.is_empty());
+            assert_ne!(*pattern, "");
             assert!(!reason.is_empty(), "`{pattern}` is refused without saying why");
         }
     }

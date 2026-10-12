@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn every_kind_has_a_label() {
         for kind in [CheckKind::Build, CheckKind::Test, CheckKind::Lint, CheckKind::Other] {
-            assert!(!kind.label().is_empty());
+            assert_ne!(kind.label(), "");
         }
     }
 }

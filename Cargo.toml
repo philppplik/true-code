@@ -99,6 +99,9 @@ missing_panics_doc = "allow"
 # Our module docs are prose that names products and protocols; demanding
 # backticks around every one of them makes the documentation harder to read.
 doc_markdown = "allow"
+# An `assert!(x.is_empty(), "why")` with a reason attached reads better in
+# tests than assert_eq! against an empty value.
+assert_is_empty = "allow"
 
 [profile.release]
 lto = "thin"
