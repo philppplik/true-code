@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://philppplik.github.io/true-code/sitemap.xml
+Sitemap: https://trc.philipp-paulik.de/sitemap.xml

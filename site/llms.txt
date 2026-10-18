@@ -4,4 +4,4 @@
 
 - Repository: https://github.com/philppplik/true-code
 - Install guide: https://github.com/philppplik/true-code/blob/main/docs/INSTALL.md
-- Developer: https://philppplik.github.io/true-code/entwickler/philipp-paulik/
+- Developer: https://trc.philipp-paulik.de/entwickler/philipp-paulik/
