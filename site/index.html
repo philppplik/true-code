@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>true-code - shows you what it did, and what it cost</title>
+    <meta name="description" content="An open-source agentic coding harness in Rust that shows you what it did and what it cost: live cost per turn, budget caps, diff previews before every write, and evidence blocks instead of self-reported success." />
+    <link rel="canonical" href="https://philppplik.github.io/true-code/" />
+    <meta name="theme-color" content="#111313" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:site_name" content="true-code" />
+    <meta property="og:title" content="true-code - shows you what it did, and what it cost" />
+    <meta property="og:description" content="An open-source agentic coding harness in Rust that shows you what it did and what it cost: live cost per turn, budget caps, diff previews before every write, and evidence blocks instead of self-reported success." />
+    <meta property="og:url" content="https://philppplik.github.io/true-code/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="true-code - shows you what it did, and what it cost" />
+    <meta name="twitter:description" content="An open-source agentic coding harness in Rust that shows you what it did and what it cost: live cost per turn, budget caps, diff previews before every write, and evidence blocks instead of self-reported success." />
+    <style>
+      :root {
+        --accent: #a8e5c1;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background: #111313;
+        color: #eeeae3;
+        font:
+          16px/1.65 Arial,
+          sans-serif;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      a:hover {
+        color: var(--accent);
+      }
+      .wrap {
+        max-width: 1200px;
+        margin: auto;
+        padding: 0 6%;
+      }
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        border-bottom: 1px solid #ffffff20;
+      }
+      .brand {
+        font-weight: 700;
+        font-size: 25px;
+        letter-spacing: -1px;
+      }
+      .nav nav {
+        display: flex;
+        gap: 25px;
+        font-size: 13px;
+      }
+      .tag,
+      .eyebrow {
+        font: 11px/1.5 monospace;
+        letter-spacing: 2px;
+        color: var(--accent);
+      }
+      .hero {
+        padding-top: 95px;
+        padding-bottom: 85px;
+        position: relative;
+      }
+      .hero:after {
+        content: '';
+        position: absolute;
+        z-index: -1;
+        inset: 0;
+        background: radial-gradient(
+          ellipse at 90% 10%,
+          color-mix(in srgb, var(--accent) 10%, transparent),
+          transparent 60%
+        );
+      }
+      h1,
+      h2 {
+        font-family: Georgia, serif;
+        font-weight: 400;
+        line-height: 1.04;
+        letter-spacing: -3px;
+      }
+      h1 {
+        font-size: clamp(52px, 7.3vw, 100px);
+        margin: 25px 0 30px;
+      }
+      em {
+        font-weight: 400;
+        color: var(--accent);
+      }
+      .lead {
+        max-width: 670px;
+        color: #bdbeb8;
+        font-size: 19px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin: 32px 0;
+      }
+      .button {
+        border: 1px solid #ffffff30;
+        padding: 12px 23px;
+        border-radius: 100px;
+        font-size: 14px;
+        display: inline-block;
+      }
+      .primary {
+        background: var(--accent);
+        color: #101313;
+        border-color: var(--accent);
+      }
+      .primary:hover {
+        color: #101313;
+        filter: brightness(1.1);
+      }
+      .meta {
+        color: #919790;
+        font: 12px/1.8 monospace;
+      }
+      .visual {
+        border: 1px solid #ffffff24;
+        border-radius: 14px;
+        background: #191c1c;
+        overflow: hidden;
+        margin: 0 0 70px;
+      }
+      .visual img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .visual .bar {
+        padding: 12px 20px;
+        border-bottom: 1px solid #ffffff18;
+        font: 11px monospace;
+        color: #999;
+      }
+      .terminal {
+        padding: 40px;
+        font: clamp(13px, 2vw, 19px)/2 monospace;
+      }
+      .terminal span {
+        color: var(--accent);
+      }
+      .section {
+        padding: 65px 0;
+        border-top: 1px solid #ffffff20;
+      }
+      h2 {
+        font-size: clamp(38px, 5vw, 62px);
+        margin: 15px 0 35px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 45px;
+      }
+      .grid article {
+        border-top: 1px solid #ffffff20;
+        padding-top: 20px;
+      }
+      .number {
+        color: var(--accent);
+        font: 12px monospace;
+      }
+      h3 {
+        font-size: 21px;
+        font-weight: 400;
+        margin: 15px 0 8px;
+      }
+      p {
+        color: #bdbeb8;
+      }
+      .install {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 50px;
+      }
+      .install pre {
+        padding: 22px;
+        background: #1b1e1e;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        border: 1px solid #ffffff24;
+        color: var(--accent);
+        font-size: 13px;
+      }
+      .faq {
+        max-width: 820px;
+      }
+      details {
+        border-top: 1px solid #ffffff25;
+        padding: 20px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-size: 19px;
+      }
+      footer {
+        padding: 45px 0;
+        color: #9ca19a;
+        font-size: 13px;
+      }
+      footer .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 22px;
+        margin-top: 20px;
+      }
+      .legal {
+        max-width: 850px;
+        padding-top: 60px;
+        padding-bottom: 60px;
+      }
+      .legal h1 {
+        font-size: 60px;
+      }
+      .legal h2 {
+        font: 26px Georgia;
+        letter-spacing: 0;
+        line-height: 1.2;
+        margin-top: 35px;
+      }
+      .legal a {
+        text-decoration: underline;
+      }
+      .skip {
+        position: absolute;
+        top: -100px;
+      }
+      .skip:focus {
+        top: 0;
+        background: #fff;
+        color: #000;
+        padding: 10px;
+      }
+      @media (max-width: 650px) {
+        .nav nav {
+          gap: 12px;
+          font-size: 11px;
+        }
+        .brand {
+          font-size: 21px;
+        }
+        .hero {
+          padding-top: 65px;
+          padding-bottom: 45px;
+        }
+        h1 {
+          letter-spacing: -2px;
+        }
+        .lead {
+          font-size: 17px;
+        }
+        .grid,
+        .install {
+          grid-template-columns: 1fr;
+          gap: 25px;
+        }
+        .terminal {
+          padding: 20px;
+          font-size: 12px;
+        }
+        .section {
+          padding: 45px 0;
+        }
+        .visual {
+          margin-bottom: 40px;
+        }
+        .legal h1 {
+          font-size: 44px;
+        }
+        .nav nav a:first-child {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+    </style>
+    <style id="product-design-system">
+      body {
+        background: #fff;
+        color: #0d0d11;
+        font-family:
+          Inter,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      :root {
+        --accent: #047857;
+      }
+      h1,
+      h2 {
+        font-family: inherit;
+        font-weight: 650;
+        letter-spacing: -0.04em;
+      }
+      h1 {
+        font-size: clamp(44px, 5.5vw, 72px);
+      }
+      em {
+        font-style: normal;
+        color: #047857;
+      }
+      p,
+      .lead {
+        color: #4d4d5c;
+      }
+      .meta {
+        color: #6e6e80;
+      }
+      .nav,
+      .section,
+      details {
+        border-color: #d9d9e3;
+      }
+      .hero {
+        max-width: 850px;
+        margin: auto;
+        text-align: center;
+      }
+      .hero:after {
+        display: none;
+      }
+      .lead {
+        margin: auto;
+      }
+      .actions {
+        justify-content: center;
+      }
+      .primary {
+        color: #fff;
+      }
+      .button {
+        border-radius: 10px;
+        border-color: #d9d9e3;
+      }
+      .primary {
+        border-color: #047857;
+      }
+      .visual {
+        background: #f7f7f8;
+        border-color: #d9d9e3;
+        border-radius: 14px;
+      }
+      .visual .bar {
+        border-color: #d9d9e3;
+        color: #6e6e80;
+      }
+      .grid article {
+        border: 1px solid #d9d9e3;
+        border-radius: 10px;
+        padding: 25px;
+        background: #f7f7f8;
+      }
+      .grid {
+        gap: 18px;
+      }
+      .install pre {
+        background: #f7f7f8;
+        color: #353542;
+        border-color: #d9d9e3;
+      }
+      .section h2 {
+        font-size: clamp(32px, 4vw, 46px);
+      }
+      a:hover {
+        color: #046c50;
+      }
+      .brand img {
+        width: 32px;
+        vertical-align: middle;
+        margin-right: 12px;
+      }
+    
+
+      .eyebrow,
+      .number {
+        color: #065f46;
+      }
+      footer {
+        color: #6e6e80;
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="wrap nav">
+      <a class="brand" href="./">true-code</a>
+      <nav>
+        <a href="./#features">Features</a
+        ><a href="https://github.com/philppplik/true-code#readme">Documentation ↗</a
+        ><a href="https://github.com/philppplik/true-code">GitHub ↗</a>
+      </nav>
+    </header>
+    <main id="main" class="wrap">
+      <section class="hero">
+        <span class="eyebrow">OPEN SOURCE · AGENTIC CODING HARNESS</span>
+        <h1>Shows you what it did.<br /><em>And what it cost.</em></h1>
+        <p class="lead">
+          true-code is an independent, MIT-licensed coding harness written in Rust. The agent reads
+          your actual code before answering, previews every write before it lands, reports live cost
+          per turn, and ends each run with machine-checkable evidence instead of a confident summary.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/philppplik/true-code#install">Install from source ↗</a
+          ><a class="button" href="https://github.com/philppplik/true-code">View source ↗</a>
+        </div>
+        <div class="meta">
+          OPEN SOURCE / MIT · Rust 1.88+ · Anthropic, OpenAI and OpenRouter<br />
+          Status: Phase P1 · October 2026
+        </div>
+      </section>
+      <figure class="visual" style="margin-left: 0; margin-right: 0">
+        <div class="bar">TRUE-CODE / ONE TURN, SCHEMATIC</div>
+        <div class="terminal">
+          <span>read</span> → your actual files, not guesses<br />
+          <span>plan</span> → diff preview → your confirmation<br />
+          <span>apply</span> → patch lands, commands shown before they run<br />
+          <span>report</span> → tokens + cost per turn, evidence block<br /><br />
+          No turn is <span>done</span> without observed proof.
+        </div>
+      </figure>
+      <section class="section" id="features">
+        <span class="eyebrow">NO CONFLICT OF INTEREST ON COST</span>
+        <h2>Built for the gaps<br /><em>vendors walk away from.</em></h2>
+        <div class="grid">
+          <article>
+            <span class="number">01</span>
+            <h3>Cost is not a black box</h3>
+            <p>
+              Live cost per turn, hard budget caps and cache-hit visibility. An open-source harness
+              earns nothing on token volume, so it has no reason to hide the meter.
+            </p>
+          </article>
+          <article>
+            <span class="number">02</span>
+            <h3>Nothing changes unseen</h3>
+            <p>
+              Every write is previewed as a diff and confirmed before it is applied. Every shell
+              command is shown before it runs. You stay the reviewer, not the cleanup crew.
+            </p>
+          </article>
+          <article>
+            <span class="number">03</span>
+            <h3>Evidence instead of "done"</h3>
+            <p>
+              Runs end with what the harness observed - test exit codes, build output - not with an
+              optimistic self-report. A claim is only as good as its proof.
+            </p>
+          </article>
+          <article>
+            <span class="number">04</span>
+            <h3>Your keys stay yours</h3>
+            <p>
+              Anthropic, OpenAI or OpenRouter: one key each, stored in your OS keyring, never in a
+              file. Prompt-cache accounting on every call.
+            </p>
+          </article>
+        </div>
+      </section>
+      <section class="section install">
+        <div>
+          <span class="eyebrow">GET STARTED</span>
+          <h2>One binary.<br /><em>Your provider key.</em></h2>
+          <p>
+            Requires Rust 1.88 or newer; there is no installer yet. On first run true-code asks for
+            a provider and stores the key in your OS keyring.
+          </p>
+          <a class="button" href="https://github.com/philppplik/true-code/blob/main/docs/INSTALL.md">Full install guide ↗</a>
+        </div>
+        <div>
+          <pre>git clone https://github.com/philppplik/true-code
+cd true-code
+cargo install --path crates/tc-cli
+
+truecode auth login openrouter  # or: anthropic, openai
+truecode</pre>
+          <p class="meta">That puts the truecode binary on your PATH. Keys can also come from the usual environment variables.</p>
+        </div>
+      </section>
+      <section class="section faq">
+        <span class="eyebrow">STRAIGHT ANSWERS</span>
+        <h2>Good to know.</h2>
+        <details>
+          <summary>What is true-code?</summary>
+          <p>
+            An MIT-licensed, open-source agentic coding harness written in Rust. It drives coding
+            models through a transparent agent loop with tools - read_file, glob, grep, patch,
+            shell - and shows every step as it happens.
+          </p>
+        </details>
+        <details>
+          <summary>What do I need to start?</summary>
+          <p>
+            Rust 1.88+ to build, and an API key for Anthropic, OpenAI or OpenRouter. The key goes
+            into your OS keyring on first run, or into the standard environment variables.
+          </p>
+        </details>
+        <details>
+          <summary>What works today, and what is planned?</summary>
+          <p>
+            Working in Phase P1: the agent loop with tools, diff preview and confirmation, budget
+            caps, live cost per turn, cache accounting and evidence blocks. On the roadmap and not
+            built yet: OS sandboxing, MCP and the LEARN mode that explains changes before applying
+            them.
+          </p>
+        </details>
+        <details>
+          <summary>Is this website a running product?</summary>
+          <p>
+            No. This page explains the project. true-code is source you build and run locally; your
+            code and your keys never touch this site.
+          </p>
+        </details>
+      </section>
+    </main>
+    <script type="application/ld+json">
+    {"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "true-code",
+      "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows, macOS, Linux",
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+      "license": "https://opensource.org/licenses/MIT",
+      "codeRepository": "https://github.com/philppplik/true-code", "url": "https://philppplik.github.io/true-code/",
+      "author": {"@id": "https://philipp-paulik.de/#person"}}
+    </script>
+    <footer class="wrap">
+      <span>A project by <a href="./entwickler/philipp-paulik/">Philipp Paulik</a> · Open Source · MIT</span>
+      <div class="links">
+        <a href="impressum">Impressum</a
+        ><a href="datenschutz">Datenschutz</a
+        ><a href="https://hob.philipp-paulik.de/">Daily Hob</a
+        ><a href="https://kifachblatt.de/">KI Fachblatt</a>
+      </div>
+    </footer>
+  </body>
+</html>

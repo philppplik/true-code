@@ -1,0 +1,7 @@
+# true-code
+
+> Open-source agentic coding harness in Rust (MIT). Shows what the agent did and what it cost: live cost per turn, budget caps, diff preview before every write, evidence blocks instead of self-reported success. Providers: Anthropic, OpenAI, OpenRouter - keys in the OS keyring.
+
+- Repository: https://github.com/philppplik/true-code
+- Install guide: https://github.com/philppplik/true-code/blob/main/docs/INSTALL.md
+- Developer: https://philppplik.github.io/true-code/entwickler/philipp-paulik/
